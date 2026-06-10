@@ -23,6 +23,7 @@ members = [
     "crates/tremolite-distiller",
     "crates/tremolite-self-learner",
     "crates/tremolite-compress",
+    "crates/tremolite-packaging",
 ]
 resolver = "2"
 

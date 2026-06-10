@@ -1,0 +1,18 @@
+[package]
+name = "tremolite-packaging"
+version = "0.1.0"
+edition = "2021"
+description = ".amod module package reader, installer, and CLI integration for Tremolite"
+repository = "https://github.com/SpicySugar16/tremolite"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tracing = "0.1"
+thiserror = "2"
+anyhow = "1"
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"

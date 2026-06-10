@@ -48,6 +48,11 @@ pub enum Subcommand {
     Version,
     /// 帮助
     Help,
+    /// 模块管理（install / uninstall / list / info）
+    Module {
+        action: String,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -80,6 +85,7 @@ pub fn print_help() {
     println!("  config       查看/导出配置");
     println!("  health       健康检查");
     println!("  session      管理会话");
+    println!("  module       安装/卸载/列出模块 (.amod 包管理)");
     println!("  version      版本信息");
     println!("  help         显示此帮助");
     println!();
@@ -99,6 +105,10 @@ pub fn print_help() {
     println!("  tremolite plan list");
     println!("  tremolite tool list");
     println!("  tremolite health");
+    println!("  tremolite module install ./emotion-detect-v1.0.0.amod");
+    println!("  tremolite module list");
+    println!("  tremolite module uninstall emotion.detect");
+    println!("  tremolite module info emotion.detect");
 }
 
 /// 解析命令行参数为子命令
@@ -131,6 +141,7 @@ pub fn parse_args() -> ParsedCommand {
         "config" => parse_double_subcmd(&args, "config", |a, r| Subcommand::Config { action: a, args: r }),
         "health" => Subcommand::Health,
         "session" => parse_double_subcmd(&args, "session", |a, r| Subcommand::Session { action: a, args: r }),
+        "module" => parse_double_subcmd(&args, "module", |a, r| Subcommand::Module { action: a, args: r }),
         "version" | "-v" | "--version" => Subcommand::Version,
         "help" | "-h" | "--help" => Subcommand::Help,
         // 向后兼容：老式 flag 检测

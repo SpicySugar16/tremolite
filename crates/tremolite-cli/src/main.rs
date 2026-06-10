@@ -156,6 +156,10 @@ fn main() {
             handle_session(action, args, config.as_ref());
             return;
         }
+        cli::Subcommand::Module { action, args } => {
+            handle_module(action.to_string(), args.clone(), config.as_ref());
+            return;
+        }
         _ => {}
     }
 
@@ -594,4 +598,100 @@ const LEAP_MONTH_DAYS: [i64; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 
 
 fn is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
+// ─── 模块管理 ─────────────────────────────────
+
+/// 处理 `tremolite module <action> [args]` 命令
+fn handle_module(action: String, args: Vec<String>, config: Option<&Config>) {
+    use tremolite_packaging::{PackageReader, ModuleInstaller};
+
+    let modules_dir = config
+        .map(|c| PathBuf::from(&c.core.data_dir).join("modules"))
+        .unwrap_or_else(|| PathBuf::from("./data/tremolite/modules"));
+
+    let installer = ModuleInstaller::new(&modules_dir);
+
+    match action.as_str() {
+        "install" => {
+            let path = args.first().map(|s| s.as_str()).unwrap_or("");
+            if path.is_empty() {
+                eprintln!("Usage: tremolite module install <path-to-.amod>");
+                return;
+            }
+            println!("📦 Installing module from: {path}");
+            match PackageReader::from_file(path) {
+                Ok(pkg) => {
+                    let m = pkg.manifest();
+                    println!("   Module: {} v{}", m.module.name, m.module.version);
+                    println!("   Provides: {}", m.module.declare.provides.join(", "));
+                    match installer.install(&pkg) {
+                        Ok(target) => println!("✅ Installed to: {}", target.display()),
+                        Err(e) => eprintln!("❌ Install failed: {e}"),
+                    }
+                }
+                Err(e) => eprintln!("❌ Failed to read package: {e}"),
+            }
+        }
+        "uninstall" => {
+            let module_id = args.first().map(|s| s.as_str()).unwrap_or("");
+            if module_id.is_empty() {
+                eprintln!("Usage: tremolite module uninstall <module-id>");
+                return;
+            }
+            match installer.uninstall(module_id) {
+                Ok(()) => println!("✅ Uninstalled module: {module_id}"),
+                Err(e) => eprintln!("❌ {e}"),
+            }
+        }
+        "list" | "ls" => {
+            match installer.list_installed() {
+                Ok(modules) => {
+                    if modules.is_empty() {
+                        println!("📦 No modules installed.");
+                        println!("   Install one with: tremolite module install <path-to-.amod>");
+                        return;
+                    }
+                    println!("📦 Installed modules ({})", modules.len());
+                    println!();
+                    for m in &modules {
+                        println!("  {} v{}", m.name, m.version);
+                        println!("    id:        {}", m.id);
+                        println!("    language:  {}", m.language);
+                        println!("    provides:  {}", m.provides.join(", "));
+                        println!("    path:      {}", m.path.display());
+                        println!();
+                    }
+                }
+                Err(e) => eprintln!("❌ Failed to list modules: {e}"),
+            }
+        }
+        "info" => {
+            let module_id = args.first().map(|s| s.as_str()).unwrap_or("");
+            if module_id.is_empty() {
+                eprintln!("Usage: tremolite module info <module-id>");
+                return;
+            }
+            match installer.list_installed() {
+                Ok(modules) => {
+                    if let Some(m) = modules.iter().find(|m| m.id == module_id) {
+                        println!("📦 Module: {}", m.name);
+                        println!("  id:        {}", m.id);
+                        println!("  version:   {}", m.version);
+                        println!("  language:  {}", m.language);
+                        println!("  entry:     {}", m.entry);
+                        println!("  provides:  {}", m.provides.join(", "));
+                        println!("  path:      {}", m.path.display());
+                    } else {
+                        eprintln!("❌ Module '{module_id}' not installed.");
+                    }
+                }
+                Err(e) => eprintln!("❌ {e}"),
+            }
+        }
+        _ => {
+            eprintln!("Unknown module action: {action}");
+            eprintln!("Available: install, uninstall, list, info");
+        }
+    }
 }
