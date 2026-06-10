@@ -5,8 +5,11 @@ config.toml.bak
 SOUL.md
 .env
 
-# But allow templates/ in the repo (not runtime data)
+# But allow template files in the repo
 !templates/
+!templates/profiles/
+!templates/profiles/example/
+!templates/profiles/example/*
 
 target/
 *.log
