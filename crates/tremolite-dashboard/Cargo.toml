@@ -1,0 +1,12 @@
+[package]
+name = "tremolite-dashboard"
+version = "0.1.0"
+edition = "2021"
+description = "透闪石仪表盘模块 — 给 gateway 的图形化界面插件"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tremolite-core = { path = "../tremolite-core" }
+tremolite-llm = { path = "../tremolite-llm" }

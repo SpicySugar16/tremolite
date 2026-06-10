@@ -1,0 +1,21 @@
+services:
+  tremolite:
+    build: .
+    container_name: tremolite
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - RUST_LOG=info
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    restart: unless-stopped
+    # 限制资源
+    deploy:
+      resources:
+        limits:
+          memory: 512M

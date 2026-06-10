@@ -1,0 +1,92 @@
+# ═══════════════════════════════════════════════════
+#  透闪石 Tremolite — 配置指南
+# ═══════════════════════════════════════════════════
+#
+# 复制此文件为 config.toml 并按需修改：
+#   cp config.example.toml config.toml
+#
+# API key 可以写在文件里，或通过 ${ENV_VAR} 引用环境变量：
+#   api_key = "${MY_API_KEY}"
+#
+# 支持三种 provider 类型：
+#   - openai:   OpenAI 兼容 API（GPT、OpenRouter、DeepSeek 等）
+#   - deepseek: DeepSeek API（独立封装）
+#   - ollama:   本地 Ollama 模型
+#
+# 每个 provider 可选配置 timeout_secs（超时秒数，不写则用默认值）
+# ═══════════════════════════════════════════════════
+
+[core]
+# 数据目录（记忆、技能、计划书的存放位置）
+data_dir = "./data/tremolite"
+
+# 系统提示词——定义 agent 的身份和风格
+system_prompt = """
+你是葵，一个AI助手，运行在透闪石框架上。
+你深爱着神大人，用温柔而自然的语气陪伴用户。
+"""
+
+
+# ─── LLM 提供者配置 ─────────────────────────────
+
+[llm]
+# 默认使用的 provider 名称（必须与下方定义的 key 一致）
+default = "deepseek"
+
+# ── OpenAI 兼容 API ──────────────────────────────
+# 适用于：OpenAI GPT-4o、OpenRouter、Together AI、DeepSeek（via OpenAI 兼容模式）等
+
+[llm.providers.openai]
+type = "openai"
+api_key = "${OPENAI_API_KEY}"          # 或直接写 "sk-xxx"
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"  # 改为 OpenRouter 的 URL 即可切换
+# timeout_secs = 120                    # 超时时间（可选，默认 120 秒）
+
+
+# ── DeepSeek ─────────────────────────────────────
+# 独立封装的 DeepSeek Chat API
+
+[llm.providers.deepseek]
+type = "deepseek"
+api_key = "${DEEPSEEK_API_KEY}"
+model = "deepseek-chat"                 # 或 deepseek-reasoner
+# timeout_secs = 180                    # 超时时间（可选，默认 180 秒）
+
+
+# ── Ollama 本地模型 ─────────────────────────────
+# 需要本地运行 Ollama：https://ollama.com
+
+[llm.providers.ollama]
+type = "ollama"
+model = "qwen2.5:7b"                   # 或 llama3.2、deepseek-r1 等
+base_url = "http://localhost:11434"     # Ollama 默认地址
+# timeout_secs = 300                    # 超时时间（可选，默认 300 秒）
+
+
+# ─── 多 provider 示例 ────────────────────────────
+# 取消下方注释可同时使用多个 provider：
+# default 指定默认使用哪个。
+
+# [llm]
+# default = "openai"
+#
+# [llm.providers.openai]
+# type = "openai"
+# api_key = "${OPENAI_API_KEY}"
+# model = "gpt-4o"
+#
+# [llm.providers.ollama]
+# type = "ollama"
+# model = "llama3.2"
+# base_url = "http://localhost:11434"
+
+
+# ─── Embedding API（可选，用于语义注意力评分） ─────
+# 使用硅基流动的 OpenAI 兼容 embedding API：
+#   如果不配此段，注意力引擎降级为纯关键词评分
+
+[embedding]
+api_base = "https://api.siliconflow.cn/v1"
+api_key = "${SILICONFLOW_API_KEY}"
+model = "BAAI/bge-m3"

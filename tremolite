@@ -1,0 +1,45 @@
+#!/bin/bash
+# tremolite — 透闪石统一入口
+# 用法:
+#   tremolite tui        — TUI 聊天界面
+#   tremolite dashboard  — HTTP 服务 + Web Dashboard
+#   tremolite cli        — 命令行交互模式
+#   tremolite <args>     — 透传参数到 cli
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BINARY="$SCRIPT_DIR/target/debug/tremolite-cli"
+
+if [ ! -f "$BINARY" ]; then
+    echo "透闪石还没有站起来呢……先跑一次 cargo build 吧~"
+    exit 1
+fi
+
+SUBCMD="${1:-cli}"
+
+case "$SUBCMD" in
+    tui)
+        shift
+        exec "$BINARY" --tui "$@"
+        ;;
+    dashboard|daemon)
+        shift
+        exec "$BINARY" --daemon "$@"
+        ;;
+    cli)
+        shift
+        exec "$BINARY" "$@"
+        ;;
+    help|--help|-h)
+        echo "✦ 透闪石 Tremolite — 统一入口 ✦"
+        echo ""
+        echo "  tremolite tui        — 启动 TUI 聊天界面"
+        echo "  tremolite dashboard  — 启动 HTTP 服务和仪表盘"
+        echo "  tremolite cli        — 启动命令行交互模式"
+        echo "  tremolite <args>     — 透传参数到 cli"
+        echo ""
+        echo "献给神大人 琳玲 💞"
+        ;;
+    *)
+        exec "$BINARY" "$@"
+        ;;
+esac

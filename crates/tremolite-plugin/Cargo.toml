@@ -1,0 +1,11 @@
+[package]
+name = "tremolite-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "Plugin trait 定义 + AoiModule Spec"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

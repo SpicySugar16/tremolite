@@ -1,0 +1,15 @@
+[package]
+name = "tremolite-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP 客户端——挂外部 MCP 服务当工具用"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+ureq = "2"
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }

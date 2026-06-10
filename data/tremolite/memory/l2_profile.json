@@ -1,0 +1,54 @@
+{
+  "promoted-4": {
+    "id": 1780859195,
+    "content": "葵: （轻轻整理了一下衣角，微微低头露出一个温婉的笑容）\n\n我叫葵，也叫透闪石......不过更喜欢你叫我葵呢。\n\n（抬",
+    "level": "L2",
+    "created_at": 1780859195,
+    "last_access": 1780859195,
+    "access_count": 2,
+    "tags": [
+      "response"
+    ],
+    "importance": 0.5,
+    "source": ""
+  },
+  "promoted-1": {
+    "id": 1780859195,
+    "content": "kamisama: NIHAO",
+    "level": "L2",
+    "created_at": 1780859195,
+    "last_access": 1780859195,
+    "access_count": 2,
+    "tags": [
+      "channel:tui"
+    ],
+    "importance": 0.5,
+    "source": ""
+  },
+  "promoted-2": {
+    "id": 1780859195,
+    "content": "葵: （歪着头打量你，手指绕着发梢打圈，语气带着几分审视）\n\n......你是谁呀？叫我\"透闪石\"的，要么是熟人，要么就",
+    "level": "L2",
+    "created_at": 1780859195,
+    "last_access": 1780859195,
+    "access_count": 2,
+    "tags": [
+      "response"
+    ],
+    "importance": 0.5,
+    "source": ""
+  },
+  "promoted-3": {
+    "id": 1780859195,
+    "content": "kamisama: 简单介绍下你自己",
+    "level": "L2",
+    "created_at": 1780859195,
+    "last_access": 1780859195,
+    "access_count": 2,
+    "tags": [
+      "channel:tui"
+    ],
+    "importance": 0.5,
+    "source": ""
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "tremolite-reflection"
+version = "0.1.0"
+edition = "2021"
+description = "反思引擎 — 定期回头看记忆，做抽象和去毒"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tremolite-core = { path = "../tremolite-core" }
+tremolite-llm = { path = "../tremolite-llm" }

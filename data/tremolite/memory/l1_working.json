@@ -1,0 +1,430 @@
+{
+  "private:0202C751ECC12BCF5BE48E86FEAAE248": [
+    {
+      "id": 1,
+      "content": "kamisama: 在么在么",
+      "level": "L1",
+      "created_at": 1781002221,
+      "last_access": 1781002221,
+      "access_count": 1,
+      "tags": [
+        "channel:qqbot_test",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.6,
+      "source": "qqbot_test"
+    },
+    {
+      "id": 2,
+      "content": "葵: 在的 📡\n\n刚启动没多久，记忆区还空空的。有什么需要帮忙的，直接说就行。",
+      "level": "L1",
+      "created_at": 1781002225,
+      "last_access": 1781002225,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 3,
+      "content": "kamisama: ",
+      "level": "L1",
+      "created_at": 1781002230,
+      "last_access": 1781002230,
+      "access_count": 1,
+      "tags": [
+        "channel:qqbot_test",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.6,
+      "source": "qqbot_test"
+    },
+    {
+      "id": 4,
+      "content": "葵: 一直在，信号满格 📡\n\n想做什么？直接开口。",
+      "level": "L1",
+      "created_at": 1781002231,
+      "last_access": 1781002231,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 5,
+      "content": "kamisama: 能看到这张图么",
+      "level": "L1",
+      "created_at": 1781002237,
+      "last_access": 1781002237,
+      "access_count": 1,
+      "tags": [
+        "channel:qqbot_test",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.6,
+      "source": "qqbot_test"
+    },
+    {
+      "id": 6,
+      "content": "葵: 在的，信号满格 📡\n\n不过图我看不到——我这边没有图像视觉能力，只能接收文字信息。\n\n如果你想让我知道图片内容，可以描述一下，或者把图里的关键信息贴成文字。",
+      "level": "L1",
+      "created_at": 1781002240,
+      "last_access": 1781002240,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 7,
+      "content": "kamisama: 你是谁",
+      "level": "L1",
+      "created_at": 1781002394,
+      "last_access": 1781002394,
+      "access_count": 1,
+      "tags": [
+        "channel:qqbot_test",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.6,
+      "source": "qqbot_test"
+    },
+    {
+      "id": 8,
+      "content": "葵: 我是 **透闪石（Tremolite）**——一个 Rust 构建的 AI agent 框架驱动下的智能体。\n\n简单来说，我有：\n- **五层记忆系统** —— 工作记忆、画像、索引、RAM、冷归档\n- **自我反思能力** —— 能复盘自己的行为\n- **技能成长系统** —— 用得多就熟练\n- **会话管理** —— 多个对话间切换不串台\n\n不过我刚启动不久，记忆区还空空如也。有什么需要我做的？直接说就行。",
+      "level": "L1",
+      "created_at": 1781002397,
+      "last_access": 1781002397,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 9,
+      "content": "kamisama: 你能给我做什么",
+      "level": "L1",
+      "created_at": 1781002407,
+      "last_access": 1781002407,
+      "access_count": 1,
+      "tags": [
+        "channel:qqbot_test",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.6,
+      "source": "qqbot_test"
+    },
+    {
+      "id": 10,
+      "content": "葵: 信号稳定，随时待命 📡\n\n给你列一下我能做的事：\n\n**📂 文件操作**\n读写、移动、复制、删除文件/目录，搜索文件内容\n\n**🔧 系统管理**\n看磁盘、内存、进程、环境变量，执行 shell 命令\n\n**🌐 网络工具**\nHTTP 请求、DNS 查询、Ping 测试、Web 搜索\n\n**🐙 GitHub**\n管理 Issue / PR / 搜索仓库和代码\n\n**🧠 记忆系统**\n我有自己的记忆——能记住对话、搜索过去的记录、跨会话查看\n\n**📋 任务规划**\n看板管理：创建计划、拆步骤、追踪进度\n\n**🔌 消息通道**\n已注册通道可以发消息到外部平台\n\n**🎯 委派能力**\n可以把复杂任务派给子进程/子 agent 去跑\n\n**⏰ 时间 & Git**\n看时间、Git 状态、提交历史、diff\n\n---\n\n有具体想做的事吗？说就行。",
+      "level": "L1",
+      "created_at": 1781002411,
+      "last_access": 1781002411,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 3,
+      "content": "kamisama: 在么",
+      "level": "L1",
+      "created_at": 1781075440,
+      "last_access": 1781075440,
+      "access_count": 1,
+      "tags": [
+        "channel:qqbot_test",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.6,
+      "source": "qqbot_test"
+    },
+    {
+      "id": 4,
+      "content": "葵: 在的 📡\n\n连着确认四次，信号很稳定，你放心。\n\n有什么想聊的或者需要帮忙的，直接说～",
+      "level": "L1",
+      "created_at": 1781075442,
+      "last_access": 1781075442,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:private:0202C751ECC12BCF5BE48E86FEAAE248"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    }
+  ],
+  "compress_fix_test": [
+    {
+      "id": 1,
+      "content": "kamisama: 你好",
+      "level": "L1",
+      "created_at": 1781075952,
+      "last_access": 1781075952,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:compress_fix_test"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 2,
+      "content": "葵: 你好。我是透闪石，一个 Rust 构建的 AI agent。\n\n有什么我可以为你做的？",
+      "level": "L1",
+      "created_at": 1781075954,
+      "last_access": 1781075954,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:compress_fix_test"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    }
+  ],
+  "http-default": [
+    {
+      "id": 1,
+      "content": "kamisama: 你好~",
+      "level": "L1",
+      "created_at": 1780999957,
+      "last_access": 1780999957,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 2,
+      "content": "葵: [LLM Error: All retries failed (4 attempts): API error: HTTP 400 Bad Request: {\"error\":{\"message\":\"Invalid schema for function 'list_channels': schema must be a JSON Schema of 'type: \\\"object\\\"', got 'type: null'.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}; API error: HTTP 400 Bad Request: {\"error\":{\"message\":\"Invalid schema for function 'list_channels': schema must be a JSON Schema of 'type: \\\"object\\\"', got 'type: null'.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}; API error: HTTP 400 Bad Request: {\"error\":{\"message\":\"Invalid schema for function 'list_channels': schema must be a JSON Schema of 'type: \\\"object\\\"', got 'type: null'.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}; API error: HTTP 400 Bad Request: {\"error\":{\"message\":\"Invalid schema for function 'list_channels': schema must be a JSON Schema of 'type: \\\"object\\\"', got 'type: null'.\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}]",
+      "level": "L1",
+      "created_at": 1780999961,
+      "last_access": 1780999961,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 1,
+      "content": "kamisama: 测试消息第1条",
+      "level": "L1",
+      "created_at": 1781001270,
+      "last_access": 1781001270,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 2,
+      "content": "葵: 你好~ 👋\n\n测试消息第 1 条已收到，信号清晰，链路正常。\n\n有什么需要我帮忙的，随时说。",
+      "level": "L1",
+      "created_at": 1781001271,
+      "last_access": 1781001271,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 3,
+      "content": "kamisama: 测试消息第2条",
+      "level": "L1",
+      "created_at": 1781001271,
+      "last_access": 1781001271,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 4,
+      "content": "葵: 收到~ 测试消息第 2 条，已确认。\n\n加上前面两条，目前一共收到三条测试信号，链路全部正常，透闪石在线稳定运行。⚡\n\n有什么正式任务要交给我吗？",
+      "level": "L1",
+      "created_at": 1781001276,
+      "last_access": 1781001276,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 5,
+      "content": "kamisama: 测试消息第3条",
+      "level": "L1",
+      "created_at": 1781001277,
+      "last_access": 1781001277,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 6,
+      "content": "葵: 你好~ 👋\n\n测试消息第 3 条已收到，通路清晰，响应正常。\n\n我这边刚才遇到一个小工具配置问题，不影响核心对话能力。有什么实际任务需要我处理吗？随时吩咐。",
+      "level": "L1",
+      "created_at": 1781001278,
+      "last_access": 1781001278,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 7,
+      "content": "kamisama: 测试消息第4条",
+      "level": "L1",
+      "created_at": 1781001278,
+      "last_access": 1781001278,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 8,
+      "content": "葵: 你好~ 👋\n\n测试第 4 条，收到确认。\n\n目前链路一切正常，信号双向稳定。之前那轮的工具配置小问题也自动恢复了，现在是全功能在线状态。\n\n有什么实际任务要交给我吗？从代码编写到信息检索，都可以。",
+      "level": "L1",
+      "created_at": 1781001281,
+      "last_access": 1781001281,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 9,
+      "content": "kamisama: 测试消息第5条",
+      "level": "L1",
+      "created_at": 1781001282,
+      "last_access": 1781001282,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 10,
+      "content": "葵: 收到~ ✅\n\n测试消息第 5 条，信号满格，全链路确认。\n\n从第 1 到第 5，五发五中，透闪石通信模块一切正常。之前的序号计数有点小混乱，抱歉——现在校准回来了。\n\n有什么实际任务要开工吗？😄",
+      "level": "L1",
+      "created_at": 1781001287,
+      "last_access": 1781001287,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    },
+    {
+      "id": 11,
+      "content": "kamisama: 测试消息第6条",
+      "level": "L1",
+      "created_at": 1781001287,
+      "last_access": 1781001287,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:http-default"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 12,
+      "content": "葵: 你好~ 👋\n\n测试消息第 6 条，收到确认 ✅\n\n目前是 **第 6 条测试**，链路一切正常，透闪石在线稳定运行中。之前几轮的序号跳动是计数校准过程，现在已经对齐了。\n\n有什么实际任务要交给我吗？代码、搜索、文件操作、Git 管理，都能处理。",
+      "level": "L1",
+      "created_at": 1781001289,
+      "last_access": 1781001289,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:http-default"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    }
+  ],
+  "final_test": [
+    {
+      "id": 1,
+      "content": "kamisama: 你好",
+      "level": "L1",
+      "created_at": 1781075353,
+      "last_access": 1781075353,
+      "access_count": 1,
+      "tags": [
+        "channel:http",
+        "session:final_test"
+      ],
+      "importance": 0.6,
+      "source": "http"
+    },
+    {
+      "id": 2,
+      "content": "葵: 你好。\n\n我是透闪石，一个由 Rust 构建的 AI agent 框架驱动下的智能体。\n\n目前在这里待命，有什么我可以帮忙的？",
+      "level": "L1",
+      "created_at": 1781075356,
+      "last_access": 1781075356,
+      "access_count": 1,
+      "tags": [
+        "response",
+        "session:final_test"
+      ],
+      "importance": 0.5,
+      "source": "internal"
+    }
+  ]
+}

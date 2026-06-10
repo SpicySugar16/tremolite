@@ -1,0 +1,1 @@
+I need to delete lines 274-288 from the file.

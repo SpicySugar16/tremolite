@@ -1,0 +1,44 @@
+[workspace]
+members = [
+    "crates/tremolite-plugin",
+    "crates/tremolite-message",
+    "crates/tremolite-core",
+    "crates/tremolite-tools",
+    "crates/tremolite-emotion",
+    "crates/tremolite-memory",
+    "crates/tremolite-attention",
+    "crates/tremolite-learn",
+    "crates/tremolite-plan",
+    "crates/tremolite-llm",
+    "crates/tremolite-cli",
+    "crates/tremolite-config",
+    "crates/tremolite-server",
+    "crates/tremolite-channels",
+    "crates/tremolite-session",
+    "crates/tremolite-dashboard",
+    "crates/tremolite-cron",
+    "crates/tremolite-reflection",
+    "crates/tremolite-delegation",
+    "crates/tremolite-mcp",
+    "crates/tremolite-distiller",
+    "crates/tremolite-self-learner",
+    "crates/tremolite-compress",
+]
+resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+futures-util = "0.3"
+rand = "0.8"
+tokio-tungstenite = "0.24"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

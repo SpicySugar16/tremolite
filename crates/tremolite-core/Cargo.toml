@@ -1,0 +1,27 @@
+[package]
+name = "tremolite-core"
+version = "0.2.0"
+edition = "2021"
+description = "核心循环 — Phase 10 真正的核心引擎"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tremolite-plugin = { path = "../tremolite-plugin" }
+tremolite-message = { path = "../tremolite-message" }
+tremolite-tools = { path = "../tremolite-tools" }
+tremolite-emotion = { path = "../tremolite-emotion" }
+tremolite-memory = { path = "../tremolite-memory" }
+tremolite-attention = { path = "../tremolite-attention" }
+tremolite-learn = { path = "../tremolite-learn" }
+tremolite-plan = { path = "../tremolite-plan" }
+tremolite-llm = { path = "../tremolite-llm" }
+tremolite-session = { path = "../tremolite-session" }
+tremolite-delegation = { path = "../tremolite-delegation" }
+tremolite-mcp = { path = "../tremolite-mcp" }
+tremolite-cron = { path = "../tremolite-cron" }
+rand = { workspace = true }

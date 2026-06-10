@@ -1,0 +1,12 @@
+[package]
+name = "tremolite-message"
+version = "0.2.0"
+edition = "2021"
+description = "AoiMessage 消息协议 + Channel trait + ChannelRegistry"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+async-trait = "0.1"

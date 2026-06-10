@@ -1,0 +1,15 @@
+[package]
+name = "tremolite-llm"
+version = "0.1.0"
+edition = "2021"
+description = "LLM 接入层 — Provider 抽象 + 统一 Prompt 拼装协议"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+futures = "0.3"

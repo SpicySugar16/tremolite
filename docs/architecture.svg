@@ -1,0 +1,284 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1050" font-family="Consolas, 'Courier New', monospace">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" fill="#222">
+      <polygon points="0 0, 10 3.5, 0 7" />
+    </marker>
+    <marker id="arrow-dashed" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" fill="#666">
+      <polygon points="0 0, 10 3.5, 0 7" />
+    </marker>
+    <marker id="arrow-left" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto" fill="#222">
+      <polygon points="10 0, 0 3.5, 10 7" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1400" height="1050" fill="#fafafa" rx="8" />
+
+  <!-- Title -->
+  <text x="700" y="38" text-anchor="middle" font-size="22" font-weight="bold" fill="#111">Tremolite Architecture Diagram</text>
+  <text x="700" y="60" text-anchor="middle" font-size="12" fill="#888">Monochrome Component &amp; Data Flow Overview</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- LAYER 1 — External Communication Channels -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <rect x="50" y="78" width="1300" height="4" fill="#222" rx="2" />
+  <text x="700" y="98" text-anchor="middle" font-size="11" fill="#888" font-weight="bold">LAYER 1: EXTERNAL CHANNELS</text>
+
+  <!-- CLI Gateway -->
+  <rect x="80" y="110" width="180" height="52" rx="4" fill="none" stroke="#333" stroke-width="2" />
+  <text x="170" y="132" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">CLI Gateway</text>
+  <text x="170" y="150" text-anchor="middle" font-size="9" fill="#666">stdin/stdout</text>
+
+  <!-- HTTP Server -->
+  <rect x="310" y="110" width="180" height="52" rx="4" fill="none" stroke="#333" stroke-width="2" />
+  <text x="400" y="132" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">HTTP Server</text>
+  <text x="400" y="150" text-anchor="middle" font-size="9" fill="#666">REST API / WebSocket</text>
+
+  <!-- QQ Bot Channel -->
+  <rect x="540" y="110" width="180" height="52" rx="4" fill="none" stroke="#333" stroke-width="2" />
+  <text x="630" y="132" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">QQ Bot Channel</text>
+  <text x="630" y="150" text-anchor="middle" font-size="9" fill="#666">QQ Open Platform</text>
+
+  <!-- NapCat Channel -->
+  <rect x="770" y="110" width="180" height="52" rx="4" fill="none" stroke="#333" stroke-width="2" />
+  <text x="860" y="132" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">NapCat Channel</text>
+  <text x="860" y="150" text-anchor="middle" font-size="9" fill="#666">QQ NT Protocol</text>
+
+  <!-- WebSocket Channel -->
+  <rect x="1000" y="110" width="170" height="52" rx="4" fill="none" stroke="#333" stroke-width="2" />
+  <text x="1085" y="132" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">WebSocket</text>
+  <text x="1085" y="150" text-anchor="middle" font-size="9" fill="#666">Real-time Chat</text>
+
+  <!-- Arrow: Channels → ChannelRegistry -->
+  <line x1="170" y1="162" x2="170" y2="185" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+  <line x1="400" y1="162" x2="400" y2="185" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+  <line x1="630" y1="162" x2="630" y2="185" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+  <line x1="860" y1="162" x2="860" y2="185" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+  <line x1="1085" y1="162" x2="1085" y2="185" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- ChannelRegistry -->
+  <rect x="310" y="185" width="780" height="40" rx="6" fill="#222" stroke="#111" stroke-width="1.5" />
+  <text x="700" y="200" text-anchor="middle" font-size="11" fill="#fafafa" font-weight="bold">ChannelRegistry / GatewayRouter</text>
+  <text x="700" y="215" text-anchor="middle" font-size="9" fill="#ccc">Message Routing &amp; Multiplexing</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- LAYER 2 — Engine Core                      -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <rect x="50" y="238" width="1300" height="4" fill="#222" rx="2" />
+  <text x="700" y="258" text-anchor="middle" font-size="11" fill="#888" font-weight="bold">LAYER 2: ENGINE CORE</text>
+
+  <!-- Arrow: ChannelRegistry → TremoliteEngine -->
+  <line x1="700" y1="225" x2="700" y2="272" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- TremoliteEngine main box -->
+  <rect x="80" y="272" width="1240" height="200" rx="8" fill="none" stroke="#222" stroke-width="2" stroke-dasharray="6,3" />
+  <text x="700" y="292" text-anchor="middle" font-size="13" font-weight="bold" fill="#111">TremoliteEngine</text>
+
+  <!-- SessionScheduler inside -->
+  <rect x="120" y="305" width="260" height="78" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="250" y="325" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">SessionScheduler</text>
+  <text x="250" y="340" text-anchor="middle" font-size="9" fill="#666">Session 1</text>
+  <text x="250" y="353" text-anchor="middle" font-size="9" fill="#666">Session 2</text>
+  <text x="250" y="366" text-anchor="middle" font-size="9" fill="#666">Session N …</text>
+
+  <!-- Per-session worker processing pipeline -->
+  <rect x="120" y="393" width="260" height="65" rx="4" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="3,2" />
+  <text x="250" y="410" text-anchor="middle" font-size="9" fill="#666">SessionWorker (per session)</text>
+  <text x="250" y="425" text-anchor="middle" font-size="9" fill="#666">OnMessage → BuildPrompt</text>
+  <text x="250" y="440" text-anchor="middle" font-size="9" fill="#666">→ LLM → OnResponse</text>
+
+  <!-- PromptBuilder + ToolCallLoop block -->
+  <rect x="430" y="305" width="240" height="78" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="550" y="325" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">PromptBuilder</text>
+  <text x="550" y="342" text-anchor="middle" font-size="9" fill="#666">System Prompt Assembly</text>
+  <line x1="430" y1="355" x2="670" y2="355" stroke="#888" stroke-width="0.5" />
+  <text x="550" y="370" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">ToolCallLoop</text>
+  <text x="550" y="385" text-anchor="middle" font-size="9" fill="#666">Multi-round Tool Execution</text>
+
+  <!-- ProviderRegistry block -->
+  <rect x="720" y="305" width="240" height="78" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="840" y="325" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">ProviderRegistry</text>
+  <text x="840" y="342" text-anchor="middle" font-size="9" fill="#666">LLM Provider Lookup</text>
+  <line x1="720" y1="355" x2="960" y2="355" stroke="#888" stroke-width="0.5" />
+  <text x="840" y="370" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">ModelRouter</text>
+  <text x="840" y="385" text-anchor="middle" font-size="9" fill="#666">Task → Provider Routing</text>
+
+  <!-- CompositeToolExecutor block -->
+  <rect x="1010" y="305" width="240" height="78" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="1130" y="325" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">CompositeToolExecutor</text>
+  <text x="1130" y="345" text-anchor="middle" font-size="9" fill="#666">Module Tools (primary)</text>
+  <text x="1130" y="360" text-anchor="middle" font-size="9" fill="#666">Fallback Executor</text>
+
+  <!-- Event broadcasting at bottom of engine -->
+  <rect x="120" y="468" width="540" height="36" rx="4" fill="none" stroke="#666" stroke-width="1" />
+  <text x="390" y="491" text-anchor="middle" font-size="10" fill="#444">Event Broadcaster: Startup | Shutdown | OnMessage | BuildPrompt | OnToolCall | OnResponse | Decontaminate</text>
+
+  <!-- PowerCoupling / ServiceRegistry block -->
+  <rect x="720" y="468" width="530" height="36" rx="4" fill="none" stroke="#666" stroke-width="1" />
+  <text x="985" y="481" text-anchor="middle" font-size="10" fill="#444">PowerCoupling (hydraulic coupler) + ServiceRegistry</text>
+  <text x="985" y="495" text-anchor="middle" font-size="9" fill="#888">Module ↔ Engine communication protocol</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- LAYER 3 — Module System                    -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <rect x="50" y="518" width="1300" height="4" fill="#222" rx="2" />
+  <text x="700" y="538" text-anchor="middle" font-size="11" fill="#888" font-weight="bold">LAYER 3: MODULE SYSTEM</text>
+
+  <!-- Arrow: Engine → ModuleRegistry -->
+  <line x1="700" y1="504" x2="700" y2="548" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+
+  <!-- ModuleRegistry outer box -->
+  <rect x="80" y="548" width="1240" height="190" rx="8" fill="none" stroke="#222" stroke-width="2" />
+  <text x="700" y="568" text-anchor="middle" font-size="12" font-weight="bold" fill="#111">ModuleRegistry (Plugin Loader &amp; Lifecycle Manager)</text>
+
+  <!-- Core Modules row -->
+  <rect x="110" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="170" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Emotion</text>
+  <text x="170" y="615" text-anchor="middle" font-size="8" fill="#666">Mood detection</text>
+  <text x="170" y="628" text-anchor="middle" font-size="8" fill="#666">Composite emotion</text>
+
+  <rect x="250" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="310" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Memory</text>
+  <text x="310" y="615" text-anchor="middle" font-size="8" fill="#666">Recall &amp; store</text>
+  <text x="310" y="628" text-anchor="middle" font-size="8" fill="#666">Recent history</text>
+
+  <rect x="390" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="450" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Attention</text>
+  <text x="450" y="615" text-anchor="middle" font-size="8" fill="#666">Semantic scan</text>
+  <text x="450" y="628" text-anchor="middle" font-size="8" fill="#666">Relevance analysis</text>
+
+  <rect x="530" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="590" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Session</text>
+  <text x="590" y="615" text-anchor="middle" font-size="8" fill="#666">State &amp; sharing</text>
+  <text x="590" y="628" text-anchor="middle" font-size="8" fill="#666">Lifecycle</text>
+
+  <rect x="670" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="730" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Skill</text>
+  <text x="730" y="615" text-anchor="middle" font-size="8" fill="#666">Continuous</text>
+  <text x="730" y="628" text-anchor="middle" font-size="8" fill="#666">learning</text>
+
+  <rect x="810" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="870" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Cron</text>
+  <text x="870" y="615" text-anchor="middle" font-size="8" fill="#666">Scheduled tasks</text>
+  <text x="870" y="628" text-anchor="middle" font-size="8" fill="#666">Timer trigger</text>
+
+  <rect x="950" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="1010" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Delegation</text>
+  <text x="1010" y="615" text-anchor="middle" font-size="8" fill="#666">Sub-session</text>
+  <text x="1010" y="628" text-anchor="middle" font-size="8" fill="#666">forking</text>
+
+  <rect x="1090" y="582" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="1150" y="600" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Tools</text>
+  <text x="1150" y="615" text-anchor="middle" font-size="8" fill="#666">GitHub, web</text>
+  <text x="1150" y="628" text-anchor="middle" font-size="8" fill="#666">search, DNS, etc.</text>
+
+  <!-- Second row of modules -->
+  <rect x="110" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="170" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Plan</text>
+  <text x="170" y="687" text-anchor="middle" font-size="8" fill="#666">Goal planning</text>
+  <text x="170" y="700" text-anchor="middle" font-size="8" fill="#666">Step execution</text>
+
+  <rect x="250" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="310" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Reflection</text>
+  <text x="310" y="687" text-anchor="middle" font-size="8" fill="#666">Self-analysis</text>
+  <text x="310" y="700" text-anchor="middle" font-size="8" fill="#666">Cleanup trigger</text>
+
+  <rect x="390" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="450" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">MCP</text>
+  <text x="450" y="687" text-anchor="middle" font-size="8" fill="#666">Model Context</text>
+  <text x="450" y="700" text-anchor="middle" font-size="8" fill="#666">Protocol</text>
+
+  <rect x="530" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="590" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Webhook</text>
+  <text x="590" y="687" text-anchor="middle" font-size="8" fill="#666">External event</text>
+  <text x="590" y="700" text-anchor="middle" font-size="8" fill="#666">receiver</text>
+
+  <rect x="670" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="730" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Compress</text>
+  <text x="730" y="687" text-anchor="middle" font-size="8" fill="#666">Context window</text>
+  <text x="730" y="700" text-anchor="middle" font-size="8" fill="#666">compression</text>
+
+  <rect x="810" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="870" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">Distiller</text>
+  <text x="870" y="687" text-anchor="middle" font-size="8" fill="#666">Knowledge</text>
+  <text x="870" y="700" text-anchor="middle" font-size="8" fill="#666">distillation</text>
+
+  <rect x="950" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="1010" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">SelfLearner</text>
+  <text x="1010" y="687" text-anchor="middle" font-size="8" fill="#666">Autonomous</text>
+  <text x="1010" y="700" text-anchor="middle" font-size="8" fill="#666">learning</text>
+
+  <rect x="1090" y="654" width="120" height="60" rx="4" fill="none" stroke="#444" stroke-width="1.5" />
+  <text x="1150" y="672" text-anchor="middle" font-size="10" font-weight="bold" fill="#111">ProcessMdl</text>
+  <text x="1150" y="687" text-anchor="middle" font-size="8" fill="#666">External process</text>
+  <text x="1150" y="700" text-anchor="middle" font-size="8" fill="#666">stdin/stdout</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- LAYER 4 — External Services / Tools        -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <rect x="50" y="752" width="1300" height="4" fill="#222" rx="2" />
+  <text x="700" y="772" text-anchor="middle" font-size="11" fill="#888" font-weight="bold">LAYER 4: EXTERNAL SERVICES &amp; PERSISTENCE</text>
+
+  <!-- LLM Provider backends -->
+  <rect x="80" y="785" width="200" height="52" rx="4" fill="none" stroke="#333" stroke-width="1.5" />
+  <text x="180" y="805" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">LLM Providers</text>
+  <text x="180" y="822" text-anchor="middle" font-size="9" fill="#666">OpenAI / DeepSeek / Ollama</text>
+
+  <!-- Tools execution -->
+  <rect x="310" y="785" width="200" height="52" rx="4" fill="none" stroke="#333" stroke-width="1.5" />
+  <text x="410" y="805" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">Tool Services</text>
+  <text x="410" y="822" text-anchor="middle" font-size="9" fill="#666">GitHub / Web Search / DNS</text>
+
+  <!-- Data Persistence -->
+  <rect x="540" y="785" width="200" height="52" rx="4" fill="none" stroke="#333" stroke-width="1.5" />
+  <text x="640" y="805" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">Data Persistence</text>
+  <text x="640" y="822" text-anchor="middle" font-size="9" fill="#666">Memory Store / Config</text>
+
+  <!-- External Modules -->
+  <rect x="770" y="785" width="200" height="52" rx="4" fill="none" stroke="#333" stroke-width="1.5" />
+  <text x="870" y="805" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">External Modules</text>
+  <text x="870" y="822" text-anchor="middle" font-size="9" fill="#666">Process / Plugin / MCP</text>
+
+  <!-- Dashboard / Admin -->
+  <rect x="1000" y="785" width="200" height="52" rx="4" fill="none" stroke="#333" stroke-width="1.5" />
+  <text x="1100" y="805" text-anchor="middle" font-size="11" font-weight="bold" fill="#111">Admin Dashboard</text>
+  <text x="1100" y="822" text-anchor="middle" font-size="9" fill="#666">Web UI / Metrics</text>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- Data Flow Arrows (right side)              -->
+  <!-- ═══════════════════════════════════════════ -->
+
+  <!-- SessionScheduler → ModuleRegistry event flow -->
+  <line x1="380" y1="400" x2="380" y2="548" stroke="#666" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dashed)" />
+  <text x="370" y="475" text-anchor="end" font-size="9" fill="#666" transform="rotate(-90,370,475)">Event broadcast (OnMessage, BuildPrompt, etc.)</text>
+
+  <!-- ModuleRegistry → PromptBuilder prompt segment contribution -->
+  <line x1="550" y1="582" x2="550" y2="383" stroke="#666" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dashed)" />
+  <text x="555" y="480" font-size="9" fill="#666">prompt_segment()</text>
+
+  <!-- CompositeToolExecutor → Module tools -->
+  <line x1="1130" y1="383" x2="1130" y2="548" stroke="#666" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow-dashed)" />
+  <text x="1120" y="475" font-size="9" fill="#666">tool_definitions()</text>
+
+  <!-- LLM Providers → ProviderRegistry -->
+  <line x1="180" y1="785" x2="840" y2="383" stroke="#333" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow)" />
+
+  <!-- Legend -->
+  <rect x="80" y="870" width="1240" height="70" rx="4" fill="none" stroke="#aaa" stroke-width="1" />
+  <text x="700" y="888" text-anchor="middle" font-size="10" font-weight="bold" fill="#333">Legend</text>
+  <line x1="120" y1="905" x2="200" y2="905" stroke="#333" stroke-width="2" />
+  <text x="210" y="909" font-size="9" fill="#444">Component box</text>
+  <line x1="120" y1="922" x2="200" y2="922" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)" />
+  <text x="210" y="926" font-size="9" fill="#444">Data flow / message direction</text>
+  <line x1="480" y1="905" x2="560" y2="905" stroke="#666" stroke-width="1" stroke-dasharray="4,3" />
+  <text x="570" y="909" font-size="9" fill="#444">Event / async interaction</text>
+  <rect x="480" y="914" width="80" height="14" rx="3" fill="none" stroke="#222" stroke-width="2" stroke-dasharray="6,3" />
+  <text x="570" y="926" font-size="9" fill="#444">Engine boundary (dashed border)</text>
+  <line x1="920" y1="905" x2="1000" y2="905" stroke="#333" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow)" />
+  <text x="1010" y="909" font-size="9" fill="#444">External system call</text>
+  <text x="920" y="930" font-size="9" fill="#888">Tremolite v0.2.0 — Monochrome Architecture Overview</text>
+</svg>

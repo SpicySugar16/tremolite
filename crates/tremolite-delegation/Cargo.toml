@@ -1,0 +1,11 @@
+[package]
+name = "tremolite-delegation"
+version = "0.1.0"
+edition = "2021"
+description = "任务委派引擎——spawn 子进程/外部工具"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

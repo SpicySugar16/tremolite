@@ -1,0 +1,12 @@
+[package]
+name = "tremolite-distiller"
+version = "0.1.0"
+edition = "2021"
+description = "Skill distiller — analyzes practice patterns to generate systematic skill definitions"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+tracing = { workspace = true }
+tremolite-core = { path = "../tremolite-core" }
+tremolite-llm = { path = "../tremolite-llm" }

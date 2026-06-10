@@ -1,0 +1,19 @@
+[package]
+name = "tremolite-channels"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tremolite-core = { path = "../tremolite-core" }
+tremolite-message = { path = "../tremolite-message" }
+tremolite-config = { path = "../tremolite-config" }
+tremolite-llm = { path = "../tremolite-llm" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+axum = { version = "0.8", features = ["macros"] }
+tracing = "0.1"

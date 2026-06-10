@@ -1,0 +1,12 @@
+[package]
+name = "tremolite-compress"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tremolite-core = { path = "../tremolite-core" }
+tremolite-llm = { path = "../tremolite-llm" }
+tremolite-memory = { path = "../tremolite-memory" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }

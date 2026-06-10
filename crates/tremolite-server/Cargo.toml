@@ -1,0 +1,23 @@
+[package]
+name = "tremolite-server"
+version = "0.2.0"
+edition = "2021"
+description = "HTTP API server + HttpChannel + NapCatChannel"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+futures-util.workspace = true
+async-trait = "0.1"
+tremolite-core = { path = "../tremolite-core" }
+tremolite-llm = { path = "../tremolite-llm" }
+tremolite-tools = { path = "../tremolite-tools" }
+tremolite-config = { path = "../tremolite-config" }
+tremolite-emotion = { path = "../tremolite-emotion" }
+tremolite-dashboard = { path = "../tremolite-dashboard" }
+tremolite-message = { path = "../tremolite-message" }
+tremolite-channels = { path = "../tremolite-channels" }

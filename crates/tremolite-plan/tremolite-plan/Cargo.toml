@@ -1,0 +1,11 @@
+[package]
+name = "tremolite-plan"
+version = "0.1.0"
+edition = "2021"
+description = "计划书系统"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

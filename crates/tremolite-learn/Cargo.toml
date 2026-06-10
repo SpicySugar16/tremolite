@@ -1,0 +1,11 @@
+[package]
+name = "tremolite-learn"
+version = "0.1.0"
+edition = "2021"
+description = "学习引擎"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
