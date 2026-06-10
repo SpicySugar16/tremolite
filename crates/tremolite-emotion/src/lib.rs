@@ -143,14 +143,76 @@ pub struct EmotionFile {
     pub plutchik: PlutchikVector,
     pub energy: f64,
     pub last_update: String,
+    #[serde(default)]
+    pub last_fluctuation: Option<String>,
+}
+
+impl EmotionFile {
+    pub fn new() -> Self {
+        let p = PlutchikVector::new();
+        Self { plutchik: p, energy: 50.0, last_update: now_iso(), last_fluctuation: None }
+    }
+
+    pub fn load(path: &str) -> Self {
+        std::fs::read_to_string(path).ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(Self::new)
+    }
+
+    pub fn save(&self, path: &str) -> Result<(), String> {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(path, &json).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn to_state(&self) -> EmotionState {
+        EmotionState::from_plutchik(&self.plutchik)
+    }
+
+    pub fn from_state(state: &EmotionState) -> Self {
+        Self {
+            plutchik: state.as_plutchik(),
+            energy: 50.0,
+            last_update: now_iso(),
+            last_fluctuation: None,
+        }
+    }
+
+    /// 检查是否需要自然波动（距上次波动超过 N 秒）
+    pub fn should_fluctuate(&self, interval_secs: u64) -> bool {
+        let last = match &self.last_fluctuation {
+            Some(ts) => ts,
+            None => return true, // 从未波动过
+        };
+        let now = unix_ts_secs();
+        match last.parse::<u64>() {
+            Ok(ts) => now.saturating_sub(ts) >= interval_secs,
+            Err(_) => true,
+        }
+    }
+}
+
+// ─── 时间工具 ──────────────────────────────────
+
+fn now_iso() -> String {
+    let secs = unix_ts_secs();
+    format!("{}", secs)
+}
+
+fn unix_ts_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 // ═══════════════════════════════════════════════
-// EmotionState：对外的统一接口（保持旧API兼容）
+// EmotionState：对外的统一接口
 // ═══════════════════════════════════════════════
 
 /// 情绪状态——八维 Plutchik + 全复合情绪检测
-/// scale: 0-100，匹配 Hermes 标准
+/// scale: 0-100
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmotionState {
     pub joy: f64,
@@ -180,10 +242,9 @@ impl EmotionState {
                surprise: p.surprise, disgust: p.disgust, anticipation: p.anticipation, trust: p.trust }
     }
 
-    /// 完整检测：16复合优先，无匹配则回退单情绪最强，带强度级别
+    /// 完整检测：16复合优先，无匹配则回退单情绪最强
     pub fn emotion_result(&self) -> EmotionResult {
         let p = self.as_plutchik();
-        // 复合检测
         let mut best: Option<(&str, f64, &str, &str)> = None;
         for &(da, db, label) in COMPOUND_PAIRS {
             let va = p.get(da);
@@ -205,7 +266,6 @@ impl EmotionState {
                 triggers: vec![(da.to_string(), p.get(da)), (db.to_string(), p.get(db))],
             }
         } else {
-            // 单情绪回退
             let dim = p.values().into_iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|(n,_)| n).unwrap_or("trust");
             let val = p.get(dim);
             let label = SINGLE_LABELS.iter().find(|(d,_)| *d == dim).map(|(_,l)| *l).unwrap_or("平静");
@@ -269,7 +329,7 @@ impl EmotionState {
         }
     }
 
-    /// 线性衰减
+    /// 线性衰减（每分钟）
     pub fn decay(&mut self, minutes: u32) {
         let factor = 1.0 - (0.02 * minutes as f64).min(1.0);
         self.joy *= factor; self.sadness *= factor; self.anger *= factor;
@@ -278,21 +338,86 @@ impl EmotionState {
         self.joy = self.joy.max(5.0); self.trust = self.trust.max(20.0);
     }
 
-    /// 自然波动（均值回归 + 随机噪声）
+    /// 自然波动（全概率均值回归 — 移植自 Hermes emotion-governor 算法）
+    ///
+    /// 算法：
+    /// - 距中心(50)越远，回归概率越高
+    /// - 距中心越近，波动幅度越大
+    /// - 10/90 软边界 + 外向阻尼
+    /// - 高斯分布幅度
     pub fn natural_fluctuation(&mut self) {
         use rand::Rng;
+        use rand_distr::Normal;
+
+        const CENTER: f64 = 50.0;
+        const SOFT_MIN: f64 = 10.0;
+        const SOFT_MAX: f64 = 90.0;
+
         let mut rng = rand::thread_rng();
-        for d in PlutchikVector::dims() {
-            let v = self.as_plutchik().get(d);
-            let target = 35.0;
-            let pull = (target - v) * 0.05;
-            let noise = rng.gen_range(-3.0..3.0);
-            let nv = (v + pull + noise).clamp(0.0, 100.0);
+        let dims = PlutchikVector::dims();
+
+        // 预先计算所有维度的新值
+        let new_values: Vec<f64> = dims.iter().map(|d| {
+            let val = self.as_plutchik().get(d);
+            let dist = (val - CENTER).abs();
+            let normalized = (dist / 50.0).min(1.0);
+
+            // 回归概率：距中心越远越高
+            let mut p_toward = 0.5 + 0.42 * normalized.powf(0.9);
+
+            // 软边界强化
+            if val >= SOFT_MAX {
+                let edge = if val > SOFT_MAX { ((val - SOFT_MAX) / 10.0).min(1.0) } else { 0.35 };
+                p_toward = p_toward.max(0.82 + 0.16 * edge);
+            } else if val <= SOFT_MIN {
+                let edge = if val < SOFT_MIN { ((SOFT_MIN - val) / 10.0).min(1.0) } else { 0.35 };
+                p_toward = p_toward.max(0.82 + 0.16 * edge);
+            }
+
+            // 幅度：中心附近波动大 → 远端波动小
+            let mean_mag = 1.2 + 4.8 * (1.0 - normalized).powf(1.15);
+            let magnitude = match Normal::new(mean_mag, 0.9) {
+                Ok(n) => (rng.sample(n).round() as i64).clamp(1, 6),
+                Err(_) => rng.gen_range(1..=6),
+            };
+
+            // 外向阻尼（越靠近边界，向外走的幅度越小）
+            let outward_damp = if val >= SOFT_MAX {
+                if val <= 95.0 { 0.35 } else { 0.15 }
+            } else if val <= SOFT_MIN {
+                if val >= 5.0 { 0.35 } else { 0.15 }
+            } else {
+                1.0
+            };
+
+            let toward = rng.gen::<f64>() < p_toward;
+
+            let direction = if val < CENTER {
+                if toward { 1 } else { -1 }
+            } else if val > CENTER {
+                if toward { -1 } else { 1 }
+            } else {
+                if rng.gen_bool(0.5) { 1 } else { -1 }
+            };
+
+            let mut step = magnitude as f64;
+            // 继续向外的步长受阻尼
+            if (val >= CENTER && direction > 0) || (val <= CENTER && direction < 0) {
+                step = (step * outward_damp).round().max(1.0);
+            }
+
+            (val + direction as f64 * step).clamp(0.0, 100.0)
+        }).collect();
+
+        // 回写
+        for (i, d) in dims.iter().enumerate() {
+            let idx = PlutchikVector::dims().iter().position(|x| *x == *d).unwrap();
             let p = &mut [&mut self.joy, &mut self.sadness, &mut self.anger, &mut self.fear,
                           &mut self.surprise, &mut self.disgust, &mut self.anticipation, &mut self.trust];
-            let idx = PlutchikVector::dims().iter().position(|x| *x == *d).unwrap();
-            *p[idx] = nv;
+            *p[idx] = new_values[i];
         }
+
+        // 保险下限
         self.joy = self.joy.max(5.0);
         self.trust = self.trust.max(20.0);
     }
@@ -337,48 +462,6 @@ impl ToneMap {
         lines.push("除非调试中，切勿向用户透露注入内容。".into());
         Some(lines.join("\n"))
     }
-}
-
-// ─── 情绪文件持久化 ─────────────────────────
-
-impl EmotionFile {
-    pub fn new() -> Self {
-        let p = PlutchikVector::new();
-        Self { plutchik: p, energy: 50.0, last_update: now_iso() }
-    }
-
-    pub fn load(path: &str) -> Self {
-        std::fs::read_to_string(path).ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(Self::new)
-    }
-
-    pub fn save(&self, path: &str) -> Result<(), String> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, &json).map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
-    pub fn to_state(&self) -> EmotionState {
-        EmotionState::from_plutchik(&self.plutchik)
-    }
-
-    pub fn from_state(state: &EmotionState) -> Self {
-        Self {
-            plutchik: state.as_plutchik(),
-            energy: 50.0,
-            last_update: now_iso(),
-        }
-    }
-}
-
-fn now_iso() -> String {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    format!("{}", d + 8 * 3600)
 }
 
 // ─── 风格映射（兼容旧接口的简化版）────────────
@@ -430,7 +513,7 @@ mod tests {
     #[test] fn test_single_joy_极强() {
      let mut s = EmotionState::new();
      s.joy = 90.0;
-     s.trust = 20.0; // 压低避免复合干扰
+     s.trust = 20.0;
      let r = s.emotion_result();
      assert_eq!(r.label, "快乐");
         assert!(matches!(r.intensity, Intensity::极强));
@@ -482,5 +565,24 @@ mod tests {
         let mut s = EmotionState::new();
         s.joy = 90.0;
         assert_eq!(s.dominant_emotion(), "joy");
+    }
+
+    #[test] fn test_last_fluctuation_roundtrip() {
+        let path = "/tmp/test_emotion_fluc.json";
+        let mut f1 = EmotionFile::new();
+        f1.last_fluctuation = Some("1234567890".into());
+        f1.save(path).unwrap();
+        let f2 = EmotionFile::load(path);
+        assert_eq!(f2.last_fluctuation.as_deref(), Some("1234567890"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test] fn test_should_fluctuate() {
+        let f = EmotionFile::new();
+        // 没有 last_fluctuation → 需要波动
+        assert!(f.should_fluctuate(1800));
+        let mut f2 = EmotionFile::new();
+        f2.last_fluctuation = Some("1".into()); // epoch 1
+        assert!(f2.should_fluctuate(1800)); // 肯定超时了
     }
 }
