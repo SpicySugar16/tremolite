@@ -14,7 +14,8 @@ SOUL.md
 target/
 *.log
 logs/
-
+data/
+*.jsonl
 # Development plans — not for publishing
 REQUIREMENTS.md
 SESSION_PLAN.md
