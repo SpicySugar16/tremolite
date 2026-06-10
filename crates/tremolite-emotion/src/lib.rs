@@ -154,17 +154,30 @@ impl EmotionFile {
     }
 
     pub fn load(path: &str) -> Self {
-        std::fs::read_to_string(path).ok()
+        let expanded = if path.starts_with("~/") {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            path.replacen("~", &home, 1)
+        } else {
+            path.to_string()
+        };
+        std::fs::read_to_string(&expanded)
+            .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_else(Self::new)
     }
 
     pub fn save(&self, path: &str) -> Result<(), String> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
+        let expanded = if path.starts_with("~/") {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            path.replacen("~", &home, 1)
+        } else {
+            path.to_string()
+        };
+        if let Some(parent) = std::path::Path::new(&expanded).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, &json).map_err(|e| e.to_string())?;
+        std::fs::write(&expanded, &json).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -197,7 +210,7 @@ impl EmotionFile {
 
 // ─── 时间工具 ──────────────────────────────────
 
-fn now_iso() -> String {
+pub fn now_iso() -> String {
     let secs = unix_ts_secs();
     format!("{}", secs)
 }
@@ -232,7 +245,7 @@ impl EmotionState {
                surprise: p.surprise, disgust: p.disgust, anticipation: p.anticipation, trust: p.trust }
     }
 
-    fn as_plutchik(&self) -> PlutchikVector {
+    pub fn as_plutchik(&self) -> PlutchikVector {
         PlutchikVector { joy: self.joy, sadness: self.sadness, anger: self.anger, fear: self.fear,
                          surprise: self.surprise, disgust: self.disgust, anticipation: self.anticipation, trust: self.trust }
     }

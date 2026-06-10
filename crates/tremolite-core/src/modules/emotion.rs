@@ -120,15 +120,26 @@ impl Module for EmotionModule {
     }
 
     fn on_event(&mut self, event: &Event, ctx: &EventContext) -> Result<EventResponse, ModuleError> {
+        let file_path = self.emotion_file_path.clone();
         match event {
             Event::OnMessage { input, .. } => {
-                let file_path = self.emotion_file_path.clone();
                 let session_id = ctx.session_id.clone();
                 let state = self.state_for_mut(&session_id);
                 state.detect_from_text(input);
 
                 if !file_path.is_empty() {
-                    let file = tremolite_emotion::EmotionFile::from_state(state);
+                    let file = tremolite_emotion::EmotionFile {
+                        plutchik: state.as_plutchik(),
+                        energy: 50.0,
+                        last_update: tremolite_emotion::now_iso(),
+                        last_fluctuation: None,
+                    };
+                    // 保留上一次的 last_fluctuation
+                    let existing = tremolite_emotion::EmotionFile::load(&file_path);
+                    let file = tremolite_emotion::EmotionFile {
+                        last_fluctuation: existing.last_fluctuation,
+                        ..file
+                    };
                     let _ = file.save(&file_path);
                 }
 
@@ -137,6 +148,22 @@ impl Module for EmotionModule {
             Event::Startup => {
                 for state in self.states.values_mut() {
                     state.natural_fluctuation();
+                }
+                // Startup 波动后持久化
+                eprintln!("[emotion-debug] Startup: file_path='{}' len={}",
+                    file_path, self.states.len());
+                if !file_path.is_empty() {
+                    if let Some(state) = self.states.get("") {
+                        eprintln!("[emotion-debug] Saving after startup fluctuation: joy={}", state.joy);
+                        let now = tremolite_emotion::now_iso();
+                        let file = tremolite_emotion::EmotionFile {
+                            plutchik: state.as_plutchik(),
+                            energy: 50.0,
+                            last_update: now.clone(),
+                            last_fluctuation: Some(now),
+                        };
+                        let _ = file.save(&file_path);
+                    }
                 }
                 Ok(EventResponse::Pass)
             }
