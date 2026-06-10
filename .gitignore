@@ -1,3 +1,12 @@
 target/
 .env
 *.log
+logs/
+data/
+# Development plans — not for publishing
+REQUIREMENTS.md
+SESSION_PLAN.md
+tasks.md
+module-inheritance-analysis.md
+nul
+tremolite-*.md
