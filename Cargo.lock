@@ -2943,6 +2943,7 @@ dependencies = [
  "tremolite-cron",
  "tremolite-dashboard",
  "tremolite-delegation",
+ "tremolite-distiller",
  "tremolite-emotion",
  "tremolite-learn",
  "tremolite-llm",
@@ -3050,7 +3051,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-emotion"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rand 0.8.6",
  "rand_distr",

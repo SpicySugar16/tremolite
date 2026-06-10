@@ -31,6 +31,7 @@ tremolite-mcp = { path = "../tremolite-mcp" }
 tremolite-channels = { path = "../tremolite-channels" }
 tremolite-compress = { path = "../tremolite-compress" }
 tremolite-packaging = { path = "../tremolite-packaging" }
+tremolite-distiller = { path = "../tremolite-distiller" }
 ratatui = "0.30"
 crossterm = "0.29"
 unicode-width = "0.2"

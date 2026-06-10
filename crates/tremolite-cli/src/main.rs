@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tremolite_core::TremoliteEngine;
 use tremolite_core::modules::{
@@ -22,6 +23,7 @@ use tremolite_reflection::ReflectionModule;
 use tremolite_compress::CompressModule;
 use tremolite_channels::ChannelsModule;
 use std::collections::HashMap;
+use tremolite_distiller::DistillerModule;
 
 mod cli;
 mod tui;
@@ -243,6 +245,24 @@ fn main() {
     }
     // Webhook 模块——外部事件监听与自动化流水线
     let _ = engine.register_module(Box::new(WebhookModule::new()));
+
+    // 技能蒸馏器——从实践日志中提取高频模式，通过 LLM 生成新技能
+    {
+        let providers = engine.providers.clone();
+        let llm_fn: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync> = Arc::new(move |prompt| {
+            let provider = providers
+                .get_default()
+                .ok_or_else(|| "no default provider".to_string())?;
+            let messages = vec![
+                tremolite_llm::Message::system("你是一个技能蒸馏器。"),
+                tremolite_llm::Message::user(prompt),
+            ];
+            let response = provider.chat(&messages, &[]).map_err(|e| e.to_string())?;
+            Ok(response.content)
+        });
+        let _ = engine.register_module(Box::new(DistillerModule::new(llm_fn)));
+        println!("  Distiller registered ✓");
+    }
     println!("  Modules registered ✓");
 
     // ── 6. 初始化定时任务 ────────────────────────
