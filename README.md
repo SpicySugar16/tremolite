@@ -2,6 +2,11 @@
 
 > A modular AI agent framework built on Rust, powered by [Artic Protocol](https://github.com/SpicySugar16/artic-protocol)
 
+> [!WARNING]
+> **Under Development** — This is an early-stage research project. A ready-to-download release with pre-built binaries will be available in a future version. For now, please build from source.
+>
+> **开发中** — 这是一个早期研究项目。后续版本将提供可直接下载的发行版。目前请从源码构建。
+
 **English** · <a href="#chinese-version">中文</a>
 
 ![Tremolite Crate Architecture](./docs/assets/crate-architecture-en.svg?t=1)
@@ -74,6 +79,8 @@ cargo run -p tremolite-server
 
 - **[Artic Protocol](https://github.com/SpicySugar16/artic-protocol)** — The standard protocol Tremolite implements
 - **[Artic Protocol SPEC](https://github.com/SpicySugar16/artic-protocol/blob/main/SPEC.md)** — Full protocol specification
+- **[Tremolite Memory](https://github.com/SpicySugar16/tremolite-memory)** — Standalone 5-layer cached memory module
+- **[Tremolite Reflection](https://github.com/SpicySugar16/tremolite-reflection)** — Metacognition & abstraction engine
 - **[Discussion / Issues](https://github.com/SpicySugar16/tremolite/issues)** — Questions, bugs, and contributions welcome
 
 ## License
@@ -165,6 +172,8 @@ cargo run -p tremolite-server
 
 - **[Artic Protocol](https://github.com/SpicySugar16/artic-protocol)** — 透闪石遵循的标准协议
 - **[Artic Protocol SPEC](https://github.com/SpicySugar16/artic-protocol/blob/main/SPEC.md)** — 完整协议规范
+- **[记忆模块](https://github.com/SpicySugar16/tremolite-memory)** — 独立五层缓存记忆模块
+- **[反思模块](https://github.com/SpicySugar16/tremolite-reflection)** — 元认知与抽象引擎
 - **[讨论 / Issue](https://github.com/SpicySugar16/tremolite/issues)** — 欢迎提问、汇报 bug、贡献代码
 
 ## 许可证
