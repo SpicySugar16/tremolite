@@ -469,7 +469,7 @@ async fn handle_webhook(
     let source_str = source.clone();
 
     // 组装 WebhookEvent
-    let event = tremolite_core::modules::webhook::WebhookEvent {
+    let event = tremolite_core::WebhookEvent {
         name,
         source,
         headers: headers.iter()

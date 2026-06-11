@@ -1,6 +1,6 @@
 [package]
 name = "tremolite-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "CLI 入口 — Phase 10 全模块集成引擎"
 

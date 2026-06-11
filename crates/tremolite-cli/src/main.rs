@@ -2,18 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tremolite_core::TremoliteEngine;
-use tremolite_core::modules::{
-    emotion::EmotionModule,
-    memory::MemoryModule,
-    attention::AttentionModule,
-    plan::KanbanModule,
-    skill::SkillModule,
-    delegation::DelegationModule,
-    cron::CronModule,
-    mcp::McpModule,
-    tools::ToolsModule,
-    webhook::WebhookModule,
-    session::SessionModule,
+use tremolite_core::{
+    EmotionModule, MemoryModule, AttentionModule, KanbanModule,
+    SkillModule, DelegationModule, CronModule, McpModule,
+    ToolsModule, WebhookModule, SessionModule,
 };
 use tremolite_config::Config;
 use tremolite_server::{initialize_channels, run_server};
@@ -28,7 +20,7 @@ use tremolite_distiller::DistillerModule;
 mod cli;
 mod tui;
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.3.0";
 
 /// 从 .env 文件加载环境变量
 fn load_dotenv(path: &std::path::Path) {
@@ -279,7 +271,7 @@ fn main() {
                 };
                 let _ = engine.modules.with_module_mut("cron", |m| {
                     if let Some(cm) = m.as_any_mut()
-                        .and_then(|a| a.downcast_mut::<tremolite_core::modules::cron::CronModule>())
+                        .and_then(|a| a.downcast_mut::<tremolite_core::CronModule>())
                     {
                         match &job_cfg.action {
                             tremolite_config::CronActionConfig::LlmPrompt { prompt } => {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tremolite_core::module::{
     Capability, Event, EventContext, EventResponse, Module, ModuleError, ToolDefinition,
 };
-use tremolite_core::modules::skill::SkillModule;
+use tremolite_core::SkillModule;
 
 /// LLM 调用回调
 type LlmFn = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;

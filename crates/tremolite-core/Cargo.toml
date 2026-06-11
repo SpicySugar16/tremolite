@@ -1,6 +1,6 @@
 [package]
 name = "tremolite-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "核心循环 — Phase 10 真正的核心引擎"
 
