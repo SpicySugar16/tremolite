@@ -657,25 +657,57 @@ fn handle_module(action: String, args: Vec<String>, config: Option<&Config>) {
             }
         }
         "list" | "ls" => {
-            match installer.list_installed() {
-                Ok(modules) => {
-                    if modules.is_empty() {
-                        println!("📦 No modules installed.");
-                        println!("   Install one with: tremolite module install <path-to-.amod>");
-                        return;
-                    }
-                    println!("📦 Installed modules ({})", modules.len());
-                    println!();
-                    for m in &modules {
-                        println!("  {} v{}", m.name, m.version);
-                        println!("    id:        {}", m.id);
-                        println!("    language:  {}", m.language);
-                        println!("    provides:  {}", m.provides.join(", "));
-                        println!("    path:      {}", m.path.display());
-                        println!();
-                    }
+            // 所有内建模块——透闪石出厂预装的小伙伴们
+            let builtin_modules: Vec<(&str, &str, &str, Vec<&str>)> = vec![
+                ("emotion",    "情绪引擎",       "0.3.0", vec!["emotion.detect", "emotion.style", "emotion.composite"]),
+                ("tools",      "系统工具",       "0.3.0", vec!["tool.file_read", "tool.file_write", "tool.shell"]),
+                ("memory",     "五层记忆",       "0.3.0", vec!["memory.store", "memory.recall", "memory.search"]),
+                ("session",    "会话管理器",     "0.3.0", vec!["session.manage", "session.peek", "session.share"]),
+                ("attention",  "多尺度注意力",   "0.3.0", vec!["attention.scan", "attention.summarize"]),
+                ("skill",      "技能系统",       "0.3.0", vec!["skill.learn", "skill.practice", "skill.forget"]),
+                ("board",      "看板",           "0.3.0", vec!["plan.create", "plan.track", "plan.advance"]),
+                ("delegation", "任务委派",       "0.3.0", vec!["delegate.task", "delegate.session"]),
+                ("cron",       "定时任务",       "0.3.0", vec!["cron.schedule", "cron.execute"]),
+                ("mcp",        "MCP 客户端",     "0.3.0", vec!["mcp.discover", "mcp.call"]),
+                ("webhook",    "Webhook 订阅",   "0.3.0", vec!["webhook.listen", "webhook.route"]),
+                ("dashboard",  "仪表盘",         "0.3.0", vec!["dashboard.serve"]),
+                ("reflection", "反思引擎",       "0.3.0", vec!["reflection.dialectic", "reflection.inject"]),
+                ("compress",   "上下文压缩引擎", "0.3.0", vec!["compress.strategy", "compress.execute"]),
+                ("distiller",  "技能蒸馏器",     "0.3.0", vec!["skill.distill"]),
+            ];
+
+            // 已安装的 .amod 模块
+            let installed = match installer.list_installed() {
+                Ok(modules) => modules,
+                Err(e) => {
+                    eprintln!("❌ Failed to list installed packages: {e}");
+                    vec![]
                 }
-                Err(e) => eprintln!("❌ Failed to list modules: {e}"),
+            };
+
+            let total = builtin_modules.len() + installed.len();
+            println!("📦 透闪石模块清单（共 {} 个）", total);
+            println!();
+
+            for (id, name, ver, provides) in &builtin_modules {
+                println!("  {} v{}", name, ver);
+                println!("    id:       {}", id);
+                println!("    provides: {}", provides.join(", "));
+                println!();
+            }
+
+            for m in &installed {
+                println!("  {} v{}", m.name, m.version);
+                println!("    id:        {}", m.id);
+                println!("    language:  {}", m.language);
+                println!("    provides:  {}", m.provides.join(", "));
+                println!("    path:      {}", m.path.display());
+                println!();
+            }
+
+            if installed.is_empty() {
+                println!("  （没有额外安装的 .amod 包，上面这些都是出厂预装的喔~）");
+                println!();
             }
         }
         "info" => {
