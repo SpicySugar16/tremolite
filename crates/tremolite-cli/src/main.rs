@@ -3,19 +3,15 @@ use std::sync::Arc;
 
 use tremolite_core::TremoliteEngine;
 use tremolite_core::{
-    EmotionModule, MemoryModule, AttentionModule, KanbanModule,
-    SkillModule, DelegationModule, CronModule, McpModule,
-    ToolsModule, WebhookModule, SessionModule,
+    AttentionModule, CronModule, DelegationModule, EmotionModule, KanbanModule,
+    McpModule, MemoryModule, SessionModule, SkillModule, ToolsModule, WebhookModule,
 };
-use tremolite_config::Config;
-use tremolite_server::{initialize_channels, run_server};
-use tremolite_dashboard::DashboardModule;
-use tremolite_cron::{CronJobConfig, Schedule, CronAction};
-use tremolite_reflection::ReflectionModule;
-use tremolite_compress::CompressModule;
 use tremolite_channels::ChannelsModule;
-use std::collections::HashMap;
-use tremolite_distiller::DistillerModule;
+use tremolite_compress::CompressModule;
+use tremolite_config::Config;
+use tremolite_dashboard::DashboardModule;
+use tremolite_reflection::ReflectionModule;
+use tremolite_server::{initialize_channels, run_server};
 
 mod cli;
 mod tui;
@@ -238,7 +234,7 @@ fn main() {
     // Webhook 模块——外部事件监听与自动化流水线
     let _ = engine.register_module(Box::new(WebhookModule::new()));
 
-    // 技能蒸馏器——从实践日志中提取高频模式，通过 LLM 生成新技能
+    // 为技能系统注入 LLM 回调——启用自学习 + 蒸馏 + 三层流转
     {
         let providers = engine.providers.clone();
         let llm_fn: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync> = Arc::new(move |prompt| {
@@ -252,8 +248,30 @@ fn main() {
             let response = provider.chat(&messages, &[]).map_err(|e| e.to_string())?;
             Ok(response.content)
         });
-        let _ = engine.register_module(Box::new(DistillerModule::new(llm_fn)));
-        println!("  Distiller registered ✓");
+        // 注入到 SkillModule——learn_cycle 内部自动调用 LLM 蒸馏
+        let _ = engine.modules.with_module_mut("skill", |m| {
+            if let Some(sm) = m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::SkillModule>())
+            {
+                sm.set_llm(llm_fn);
+                println!("  Skill LLM injected ✓");
+            }
+        });
+    }
+
+    // 首次启动时运行学习循环——自动归域
+    {
+        let _ = engine.modules.with_module_mut("skill", |m| {
+            if let Some(sm) = m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::SkillModule>())
+            {
+                let stats = sm.learn_cycle();
+                if stats.new_domains > 0 || stats.new_knowledge > 0 {
+                    println!("  Initial learn cycle: {} domains, {} knowledge",
+                        stats.new_domains, stats.new_knowledge);
+                }
+            }
+        });
     }
     println!("  Modules registered ✓");
 

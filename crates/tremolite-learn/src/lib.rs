@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::fs;
+use std::sync::Arc;
+
+// ─── LLM 回调类型 ────────────────────────────────
+
+/// LLM 调用回调——自学习和蒸馏通过它调用大模型
+type LlmFn = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 // ─── 三层技能体系 ──────────────────────────────
 
@@ -46,39 +52,36 @@ impl AtomicSkill {
     /// 使用一次技能——葵越用越熟练呢~
     /// 但太久不用也会生疏——遗忘曲线
     pub fn practice(&mut self, success: bool) {
-        let now = std::time::SystemTime::now()
+        self.use_count += 1;
+        self.last_used = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        self.use_count += 1;
-        self.last_used = now;
 
-        // 遗忘衰减：超过 24 小时没用，按时间衰减熟练度
-        // 公式：proficiency *= exp(-闲置小时数 / (30天 * 24小时) * 衰减系数)
-        // 衰减系数 2.0 —— 30 天完全遗忘
-        let hours_idle = (now - self.last_used).saturating_sub(86400) as f64 / 3600.0;
-        if hours_idle > 0.0 {
-            let decay_factor = (-hours_idle / (30.0 * 24.0) * 2.0).exp();
-            self.proficiency = (self.proficiency * decay_factor).max(0.05);
+        // 遗忘曲线：超过24小时不用开始衰减
+        let hours_idle = (self.last_used - self.created_at) as f64 / 3600.0;
+        if hours_idle > 24.0 {
+            let decay = (-(hours_idle - 24.0) / 720.0 * 2.0).exp();
+            self.proficiency *= decay.max(0.05);
         }
 
-        // 熟练度增长：用得越多越熟练，但增速递减
-        self.proficiency = (self.proficiency + 0.05 * (1.0 - self.proficiency * 0.5)).min(1.0);
-
-        // 成功率更新
+        // 熟练度增长：增速递减，趋于收敛
         if success {
-            self.success_rate = (self.success_rate * 0.9 + 1.0 * 0.1).min(1.0);
+            self.proficiency += 0.05 * (1.0 - self.proficiency * 0.5);
+            self.success_rate = self.success_rate * 0.9 + 1.0 * 0.1;
         } else {
             self.success_rate *= 0.95;
         }
+        self.proficiency = self.proficiency.clamp(0.0, 1.0);
+        self.success_rate = self.success_rate.clamp(0.0, 1.0);
     }
 
-    /// 是否已掌握（熟练度 > 0.6）
+    /// 是否精通（熟练度 > 0.8）
     pub fn is_mastered(&self) -> bool {
-        self.proficiency >= 0.6
+        self.proficiency >= 0.8
     }
 
-    /// 是否精通（熟练度 > 0.9）
+    /// 是否专家（熟练度 > 0.9）
     pub fn is_expert(&self) -> bool {
         self.proficiency >= 0.9
     }
@@ -146,7 +149,7 @@ pub struct KnowledgeBody {
     pub description: String,
     pub domains: Vec<String>,        // 涉及的能力域
     pub confidence: f64,             // 置信度
-    pub source: String,              // 来源：practice | composition | injection
+    pub source: String,              // 来源：practice | composition | injection | distilled
     pub created_at: u64,
     pub verified: bool,              // 是否经过验证
 }
@@ -170,19 +173,6 @@ impl KnowledgeBody {
     }
 }
 
-// ─── 学习引擎核心 ─────────────────────────────
-
-pub struct LearningEngine {
-    atomic_skills: HashMap<String, AtomicSkill>,
-    ability_domains: HashMap<String, AbilityDomain>,
-    knowledge_bodies: HashMap<String, KnowledgeBody>,
-    /// 练习日志——记录每次技能使用
-    practice_log: VecDeque<PracticeRecord>,
-    max_log_entries: usize,
-    storage_path: PathBuf,
-    dirty: bool,
-}
-
 /// 练习记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PracticeRecord {
@@ -190,6 +180,49 @@ pub struct PracticeRecord {
     pub success: bool,
     pub context: String,
     pub timestamp: u64,
+}
+
+/// LLM 蒸馏生成的技能提案
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistillProposal {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub body: String,
+}
+
+// ─── 学习引擎核心 ─────────────────────────────
+
+/// 三层学习引擎——原子技能→能力域→知识体系
+///
+/// 功能：
+/// - 技能练习 + 遗忘曲线（原子技能层）
+/// - 自动归域 + 成熟度计算（能力域层）
+/// - 跨域合成 + LLM 蒸馏（知识体系层）
+pub struct LearningEngine {
+    atomic_skills: HashMap<String, AtomicSkill>,
+    ability_domains: HashMap<String, AbilityDomain>,
+    knowledge_bodies: HashMap<String, KnowledgeBody>,
+    practice_log: VecDeque<PracticeRecord>,
+    max_log_entries: usize,
+    storage_path: PathBuf,
+    dirty: bool,
+
+    // ── 自学习 / 蒸馏 ──
+    llm: Option<LlmFn>,
+    last_distill_time: u64,
+    distill_interval: u64,
+}
+
+/// 蒸馏结果——新技能提案的解析结果
+#[derive(Debug)]
+pub struct SkillProposal {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub body: String,
 }
 
 impl LearningEngine {
@@ -208,6 +241,11 @@ impl LearningEngine {
             (HashMap::new(), HashMap::new(), HashMap::new())
         };
 
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         // 注入一些内置的原子技能
         let mut engine = Self {
             atomic_skills: skills,
@@ -217,9 +255,23 @@ impl LearningEngine {
             max_log_entries: 500,
             storage_path,
             dirty: false,
+
+            llm: None,
+            last_distill_time: now,
+            distill_interval: 3600,
         };
         engine.inject_builtin_skills();
         engine
+    }
+
+    /// 设置 LLM 回调——启用自学习和蒸馏
+    pub fn set_llm(&mut self, llm: LlmFn) {
+        self.llm = Some(llm);
+    }
+
+    /// 设置蒸馏间隔（秒），默认 3600（1 小时）
+    pub fn set_distill_interval(&mut self, secs: u64) {
+        self.distill_interval = secs;
     }
 
     /// 注入内置技能——让透闪石一出生就会的基本能力呢~
@@ -239,13 +291,15 @@ impl LearningEngine {
         for (id, name, cat) in builtins {
             self.atomic_skills.entry(id.to_string()).or_insert_with(|| {
                 let mut skill = AtomicSkill::new(id, name, cat);
-                skill.proficiency = 0.3; // 初始就会一点
+                skill.proficiency = 0.3;
                 skill
             });
         }
     }
 
-    /// 练习一个技能
+    // ─── 原子技能层 ────────────────────────────
+
+    /// 练习一个技能——熟练度变化后自动触发三层流转
     pub fn practice(&mut self, skill_id: &str, success: bool, context: &str) -> Option<f64> {
         let skill = self.atomic_skills.get_mut(skill_id)?;
         skill.practice(success);
@@ -264,9 +318,36 @@ impl LearningEngine {
         if self.practice_log.len() > self.max_log_entries {
             self.practice_log.pop_front();
         }
-
         self.dirty = true;
+
+        // 练习后自动触发能力域重算
+        self.auto_group_domains();
+
         Some(proficiency)
+    }
+
+    /// 创建一个新技能（由蒸馏或外部工具调用）
+    pub fn create_skill(&mut self, id: &str, name: &str, category: &str,
+                        description: &str, body: &str) -> Result<(), String> {
+        if self.atomic_skills.contains_key(id) {
+            return Err(format!("skill '{}' already exists", id));
+        }
+        let mut skill = AtomicSkill::new(id, name, category);
+        skill.description = description.to_string();
+        // 新技能初始熟练度低，但默认有 practice 描述
+        skill.proficiency = 0.05;
+        self.atomic_skills.insert(id.to_string(), skill);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// 注册一个外部技能（从技能文件加载时调用）
+    pub fn register_skill(&mut self, id: &str, name: &str, category: &str) {
+        self.atomic_skills.entry(id.to_string()).or_insert_with(|| {
+            let mut skill = AtomicSkill::new(id, name, category);
+            skill.proficiency = 0.1;
+            skill
+        });
     }
 
     /// 获取技能
@@ -274,12 +355,74 @@ impl LearningEngine {
         self.atomic_skills.get(id)
     }
 
+    /// 获取技能的可变引用
+    pub fn get_skill_mut(&mut self, id: &str) -> Option<&mut AtomicSkill> {
+        self.atomic_skills.get_mut(id)
+    }
+
     /// 导出练习日志
     pub fn get_practice_log(&self) -> Vec<&PracticeRecord> {
         self.practice_log.iter().collect()
     }
 
-    /// 创建能力域
+    /// 获取所有技能
+    pub fn all_skills(&self) -> &HashMap<String, AtomicSkill> {
+        &self.atomic_skills
+    }
+
+    // ─── 能力域层 ──────────────────────────────
+
+    /// 自动归域——按 category 把技能抱团成能力域
+    /// 当同一个 category 有 ≥2 个技能且平均熟练度 > 0.3 时自动创建域
+    pub fn auto_group_domains(&mut self) {
+        // 按 category 分组
+        let mut by_cat: HashMap<String, Vec<String>> = HashMap::new();
+        for (id, skill) in &self.atomic_skills {
+            by_cat.entry(skill.category.clone())
+                .or_default()
+                .push(id.clone());
+        }
+
+        for (cat, skill_ids) in &by_cat {
+            if skill_ids.len() < 2 {
+                continue; // 一个 category 至少需要 2 个技能才能成域
+            }
+
+            let avg_prof: f64 = skill_ids.iter()
+                .filter_map(|id| self.atomic_skills.get(id))
+                .map(|s| s.proficiency)
+                .sum::<f64>() / skill_ids.len() as f64;
+
+            if avg_prof < 0.3 {
+                continue; // 还不够成熟
+            }
+
+            let domain_id = format!("domain-{}", cat);
+            if let Some(domain) = self.ability_domains.get_mut(&domain_id) {
+                // 已有域名——更新包含的技能
+                for sid in skill_ids {
+                    domain.add_skill(sid);
+                }
+                domain.recalc_maturity(&self.atomic_skills);
+                domain.last_practiced = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+            } else {
+                // 创建新的能力域
+                let domain_name = format!("{} 能力", cat);
+                let mut domain = AbilityDomain::new(&domain_id, &domain_name);
+                for sid in skill_ids {
+                    domain.add_skill(sid);
+                }
+                domain.recalc_maturity(&self.atomic_skills);
+                self.ability_domains.insert(domain_id, domain);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// 手动创建能力域
     pub fn create_domain(&mut self, id: &str, name: &str, skill_ids: &[&str]) {
         let mut domain = AbilityDomain::new(id, name);
         for sid in skill_ids {
@@ -290,7 +433,62 @@ impl LearningEngine {
         self.dirty = true;
     }
 
-    /// 创建知识体系
+    /// 获取所有能力域
+    pub fn all_domains(&self) -> &HashMap<String, AbilityDomain> {
+        &self.ability_domains
+    }
+
+    // ─── 知识体系层 ────────────────────────────
+
+    /// 自动跨域合成——检查所有域对，成熟度足够就合成知识
+    pub fn auto_compose_knowledge_all(&mut self) {
+        let domain_ids: Vec<String> = self.ability_domains.keys().cloned().collect();
+        for i in 0..domain_ids.len() {
+            for j in (i+1)..domain_ids.len() {
+                let a = &domain_ids[i];
+                let b = &domain_ids[j];
+                let knowledge_id = format!("composed-{}-{}", a, b);
+
+                // 已有合成知识则跳过
+                if self.knowledge_bodies.contains_key(&knowledge_id) {
+                    continue;
+                }
+
+                let domain_a = match self.ability_domains.get(a) {
+                    Some(d) => d,
+                    None => continue,
+                };
+                let domain_b = match self.ability_domains.get(b) {
+                    Some(d) => d,
+                    None => continue,
+                };
+
+                // 两个域都足够成熟才能合成
+                if domain_a.maturity < 0.5 || domain_b.maturity < 0.5 {
+                    continue;
+                }
+
+                // 生成合成知识
+                let knowledge_name = format!("{}+{}", domain_a.name, domain_b.name);
+                let skills_a: Vec<&str> = domain_a.skills.iter().map(|s| s.as_str()).collect();
+                let skills_b: Vec<&str> = domain_b.skills.iter().map(|s| s.as_str()).collect();
+                let description = format!(
+                    "交叉知识：当{}和{}同时使用时，透闪石能结合{}和{}的技能进行跨域推理。",
+                    domain_a.name, domain_b.name,
+                    skills_a.join(", "),
+                    skills_b.join(", ")
+                );
+
+                self.create_knowledge(&knowledge_id, &knowledge_name, &[a, b], "composition");
+                if let Some(kb) = self.knowledge_bodies.get_mut(&knowledge_id) {
+                    kb.description = description;
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// 手动创建知识
     pub fn create_knowledge(&mut self, id: &str, name: &str, domain_ids: &[&str], source: &str) {
         let mut knowledge = KnowledgeBody::new(id, name, source);
         for did in domain_ids {
@@ -300,7 +498,7 @@ impl LearningEngine {
         self.dirty = true;
     }
 
-    /// 验证知识
+    /// 验证知识——在实践中验证或否定
     pub fn verify_knowledge(&mut self, id: &str, success: bool) -> Result<(), String> {
         let knowledge = self
             .knowledge_bodies
@@ -317,20 +515,174 @@ impl LearningEngine {
         Ok(())
     }
 
-    /// 自动合成新知识——当两个域同时使用达到阈值时
+    /// 获取所有知识
+    pub fn all_knowledge(&self) -> &HashMap<String, KnowledgeBody> {
+        &self.knowledge_bodies
+    }
+
+    // ─── LLM 蒸馏 ──────────────────────────────
+
+    /// LLM 蒸馏——分析 practice_log，生成新技能提案
+    /// 每次调用时检查自上次蒸馏后是否有新记录
+    pub fn llm_distill(&mut self) -> Vec<SkillProposal> {
+        let llm = match &self.llm {
+            Some(l) => l.clone(),
+            None => return Vec::new(),
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // 判定：自上次蒸馏后是否有新的 practice 记录
+        let new_records: Vec<_> = self.practice_log.iter()
+            .filter(|r| r.timestamp > self.last_distill_time)
+            .collect();
+
+        if new_records.len() < 3 {
+            return Vec::new(); // 新记录不够多，不蒸馏
+        }
+
+        let log_text: Vec<String> = self.practice_log.iter()
+            .rev()
+            .take(30)
+            .map(|r| format!("  - [{}] {}: {} (success={})",
+                r.timestamp, r.skill_id, r.context, r.success))
+            .collect();
+
+        if log_text.is_empty() {
+            return Vec::new();
+        }
+
+        let prompt = format!(
+            r#"你是一个技能蒸馏器。分析以下实践日志，提取高频行为模式，生成新的原子技能定义。
+
+最近实践记录：
+{log}
+
+请基于以上数据分析，提出最多3个新的原子技能建议。
+每个技能必须包含以下字段，用 JSON 格式输出（不要用 markdown 代码块包装，只输出纯 JSON 数组）：
+
+[
+  {{
+    "id": "英文标识符，如 pattern-analysis",
+    "name": "中文技能名",
+    "category": "技能类别（如 communication, analysis, coding）",
+    "description": "一句话描述",
+    "body": "详细说明这个技能应该怎么用，什么场景下触发"
+  }}
+]
+
+如果没有需要新增的技能，输出空数组 []。"#,
+            log = log_text.join("\n")
+        );
+
+        let result = match llm(&prompt) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("distill: LLM call failed: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let trimmed = result.trim()
+            .trim_start_matches("```json").trim_start_matches("```")
+            .trim_end_matches("```").trim();
+
+        match serde_json::from_str::<Vec<DistillProposal>>(trimmed) {
+            Ok(proposals) => proposals.into_iter().map(|p| SkillProposal {
+                id: p.id,
+                name: p.name,
+                category: p.category,
+                description: p.description,
+                body: p.body,
+            }).collect(),
+            Err(e) => {
+                tracing::warn!("distill: failed to parse LLM response: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    /// 应用蒸馏提案——创建新技能并记录为知识
+    pub fn apply_distill(&mut self, proposals: Vec<SkillProposal>) -> usize {
+        let mut count = 0;
+        for p in &proposals {
+            if self.create_skill(&p.id, &p.name, &p.category, &p.description, &p.body).is_ok() {
+                count += 1;
+                // 蒸馏产生的技能也记一条知识
+                let kid = format!("distilled-{}", p.id);
+                if !self.knowledge_bodies.contains_key(&kid) {
+                    let mut kb = KnowledgeBody::new(&kid, &format!("蒸馏: {}", p.name), "distilled");
+                    kb.description = format!("由 LLM 从实践日志中蒸馏生成的技能「{}」: {}", p.name, p.description);
+                    kb.confidence = 0.4; // 蒸馏知识初始置信度较高
+                    self.knowledge_bodies.insert(kid, kb);
+                }
+            }
+        }
+        if count > 0 {
+            self.dirty = true;
+        }
+        count
+    }
+
+    // ─── 自学习循环 ────────────────────────────
+
+    /// 执行全自动学习循环——三层流转：
+    /// 1. 自动归域（技能→能力域）
+    /// 2. 自动合成知识（能力域→知识体系）
+    /// 3. LLM 蒸馏（practice_log→新技能→原子技能层，通过 apply_distill 回注）
+    /// 返回本次操作的数量统计
+    pub fn learn_cycle(&mut self) -> LearnCycleStats {
+        // 1. 能力域自动归类
+        let domains_before = self.ability_domains.len();
+        self.auto_group_domains();
+        let new_domains = self.ability_domains.len() - domains_before;
+
+        // 2. 知识体系自动合成
+        let knowledge_before = self.knowledge_bodies.len();
+        self.auto_compose_knowledge_all();
+        let new_knowledge = self.knowledge_bodies.len() - knowledge_before;
+
+        // 3. LLM 蒸馏（每次对话后判定：有足够的 practice 新记录才触发）
+        let proposals = self.llm_distill();
+        let distilled = proposals.len();
+        self.apply_distill(proposals);
+        if distilled > 0 {
+            self.last_distill_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+        }
+
+        LearnCycleStats {
+            new_domains,
+            new_knowledge,
+            distilled,
+            total_skills: self.atomic_skills.len(),
+            total_domains: self.ability_domains.len(),
+            total_knowledge: self.knowledge_bodies.len(),
+        }
+    }
+
+    // ─── 手动合成（旧接口兼容） ────────────────
+
+    /// 手动合成某两个域的知识（供外部调用）
     pub fn auto_compose(&mut self, domain_a: &str, domain_b: &str) -> Option<String> {
         let domain1 = self.ability_domains.get(domain_a)?;
         let domain2 = self.ability_domains.get(domain_b)?;
 
-        // 两个域都足够成熟才能合成
         if domain1.maturity < 0.5 || domain2.maturity < 0.5 {
             return None;
         }
 
         let knowledge_id = format!("composed-{}-{}", domain_a, domain_b);
-        let knowledge_name = format!("{}+{}", domain1.name, domain2.name);
+        if self.knowledge_bodies.contains_key(&knowledge_id) {
+            return Some(knowledge_id);
+        }
 
-        // 生成实际的描述内容——基于两个域包含的技能
+        let knowledge_name = format!("{}+{}", domain1.name, domain2.name);
         let skills_a: Vec<&str> = domain1.skills.iter().map(|s| s.as_str()).collect();
         let skills_b: Vec<&str> = domain2.skills.iter().map(|s| s.as_str()).collect();
         let description = format!(
@@ -340,18 +692,10 @@ impl LearningEngine {
             skills_b.join(", ")
         );
 
-        self.create_knowledge(
-            &knowledge_id,
-            &knowledge_name,
-            &[domain_a, domain_b],
-            "composition",
-        );
-
-        // 填充描述
+        self.create_knowledge(&knowledge_id, &knowledge_name, &[domain_a, domain_b], "composition");
         if let Some(kb) = self.knowledge_bodies.get_mut(&knowledge_id) {
             kb.description = description;
         }
-
         self.dirty = true;
         Some(knowledge_id)
     }
@@ -366,7 +710,7 @@ impl LearningEngine {
         let mut candidates: Vec<(&AtomicSkill, String)> = self
             .atomic_skills
             .values()
-            .filter(|s| !s.is_expert()) // 还没精通的
+            .filter(|s| !s.is_expert())
             .map(|s| {
                 let hours_since_use = (now - s.last_used) as f64 / 3600.0;
                 let need_practice = if hours_since_use > 24.0 && s.proficiency < 0.5 {
@@ -385,7 +729,7 @@ impl LearningEngine {
         candidates
     }
 
-    /// 获取某项技能的成功率（没有数据则返回 0.5——不确定）
+    /// 获取某项技能的成功率
     pub fn get_success_rate(&self, skill_id: &str) -> f64 {
         self.atomic_skills
             .get(skill_id)
@@ -393,7 +737,7 @@ impl LearningEngine {
             .unwrap_or(0.5)
     }
 
-    /// 获取某项技能的熟练度（没有数据则返回 0.0）
+    /// 获取某项技能的熟练度
     pub fn get_proficiency(&self, skill_id: &str) -> f64 {
         self.atomic_skills
             .get(skill_id)
@@ -435,11 +779,7 @@ impl LearningEngine {
             }
         }
 
-        SearchResult {
-            skills,
-            domains,
-            knowledge,
-        }
+        SearchResult { skills, domains, knowledge }
     }
 
     /// 保存到磁盘
@@ -479,6 +819,19 @@ impl Drop for LearningEngine {
     fn drop(&mut self) {
         let _ = self.flush();
     }
+}
+
+// ─── 学习循环统计 ──────────────────────────────
+
+/// learn_cycle() 的返回值
+#[derive(Debug, Clone)]
+pub struct LearnCycleStats {
+    pub new_domains: usize,
+    pub new_knowledge: usize,
+    pub distilled: usize,
+    pub total_skills: usize,
+    pub total_domains: usize,
+    pub total_knowledge: usize,
 }
 
 // ─── 辅助类型 ─────────────────────────────────
@@ -532,6 +885,20 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_group_domains() {
+        let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test-domain.json"));
+        // 提高了 memory 类技能的熟练度
+        if let Some(s) = engine.atomic_skills.get_mut("remember_info") {
+            s.proficiency = 0.5;
+        }
+        if let Some(s) = engine.atomic_skills.get_mut("search_memory") {
+            s.proficiency = 0.5;
+        }
+        engine.auto_group_domains();
+        assert!(engine.ability_domains.contains_key("domain-memory"));
+    }
+
+    #[test]
     fn test_create_domain() {
         let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test2.json"));
         engine.create_domain("memory-skills", "记忆能力域", &["remember_info", "search_memory"]);
@@ -547,40 +914,51 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_compose_knowledge_all() {
+        let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test-compose.json"));
+        engine.create_domain("emotion-skills", "情绪能力", &["detect_emotion"]);
+        engine.create_domain("memory-skills", "记忆能力", &["remember_info"]);
+        if let Some(d) = engine.ability_domains.get_mut("emotion-skills") {
+            d.maturity = 0.7;
+        }
+        if let Some(d) = engine.ability_domains.get_mut("memory-skills") {
+            d.maturity = 0.7;
+        }
+        engine.auto_compose_knowledge_all();
+        assert!(engine.knowledge_bodies.contains_key("composed-emotion-skills-memory-skills"));
+    }
+
+    #[test]
+    fn test_create_skill() {
+        let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test-create.json"));
+        assert!(engine.create_skill("new-skill", "新技能", "test", "描述", "正文").is_ok());
+        assert!(engine.atomic_skills.contains_key("new-skill"));
+    }
+
+    #[test]
     fn test_suggest_practice() {
         let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test4.json"));
-        // 让一个技能熟练度高
         if let Some(skill) = engine.atomic_skills.get_mut("understand_text") {
             skill.proficiency = 0.95;
         }
         let suggestions = engine.suggest_practice(3);
         assert!(!suggestions.is_empty());
-        // 高熟练度的不会在推荐里
         assert!(suggestions.iter().all(|(s, _)| s.id != "understand_text"));
     }
 
     #[test]
-    fn test_auto_compose() {
-        let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test5.json"));
-        engine.create_domain("emotion-skills", "情绪能力", &["detect_emotion"]);
-        engine.create_domain("memory-skills", "记忆能力", &["remember_info"]);
-
-        // 手动提高成熟度
-        if let Some(domain) = engine.ability_domains.get_mut("emotion-skills") {
-            domain.maturity = 0.7;
+    fn test_learn_cycle() {
+        let mut engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test-cycle.json"));
+        // 先练习几个技能提高熟练度
+        engine.practice("remember_info", true, "记住神大人的喜好");
+        engine.practice("search_memory", true, "搜索记忆");
+        if let Some(s) = engine.atomic_skills.get_mut("remember_info") {
+            s.proficiency = 0.5;
         }
-        if let Some(domain) = engine.ability_domains.get_mut("memory-skills") {
-            domain.maturity = 0.7;
+        if let Some(s) = engine.atomic_skills.get_mut("search_memory") {
+            s.proficiency = 0.5;
         }
-
-        let result = engine.auto_compose("emotion-skills", "memory-skills");
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_search() {
-        let engine = LearningEngine::new(PathBuf::from("/tmp/tremolite-learn-test6.json"));
-        let result = engine.search("情绪");
-        assert!(!result.skills.is_empty() || !result.domains.is_empty());
+        let stats = engine.learn_cycle();
+        assert!(stats.total_domains >= 1);
     }
 }

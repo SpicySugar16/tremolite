@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::fs;
 
 use tremolite_learn::LearningEngine;
@@ -52,6 +53,16 @@ impl SkillModule {
     }
     pub fn engine_mut(&mut self) -> &mut LearningEngine {
         &mut self.engine
+    }
+
+    /// 设置 LLM 回调——启用自学习和蒸馏
+    pub fn set_llm(&mut self, llm: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>) {
+        self.engine.set_llm(llm);
+    }
+
+    /// 执行学习循环——自动归类域、合成知识、LLM 蒸馏
+    pub fn learn_cycle(&mut self) -> tremolite_learn::LearnCycleStats {
+        self.engine.learn_cycle()
     }
 
     /// 创建技能文件并加载到引擎
@@ -487,6 +498,11 @@ impl Module for SkillModule {
                 success,
             } => {
                 self.engine.practice(name, *success, args);
+                Ok(EventResponse::Pass)
+            }
+            Event::OnResponse { response: _ } => {
+                // 每次回复后触发学习循环——自动归域、合成知识、LLM 蒸馏
+                let _stats = self.learn_cycle();
                 Ok(EventResponse::Pass)
             }
             Event::ModuleRegistered { info } => {

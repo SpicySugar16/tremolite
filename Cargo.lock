@@ -2943,7 +2943,6 @@ dependencies = [
  "tremolite-cron",
  "tremolite-dashboard",
  "tremolite-delegation",
- "tremolite-distiller",
  "tremolite-emotion",
  "tremolite-learn",
  "tremolite-llm",
@@ -3036,17 +3035,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
-]
-
-[[package]]
-name = "tremolite-distiller"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tracing",
- "tremolite-core",
- "tremolite-llm",
 ]
 
 [[package]]
@@ -3163,17 +3151,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
- "tremolite-core",
- "tremolite-llm",
-]
-
-[[package]]
-name = "tremolite-self-learner"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
  "tracing",
  "tremolite-core",
  "tremolite-llm",

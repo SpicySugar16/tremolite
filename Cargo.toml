@@ -20,8 +20,6 @@ members = [
     "crates/tremolite-reflection",
     "crates/tremolite-delegation",
     "crates/tremolite-mcp",
-    "crates/tremolite-distiller",
-    "crates/tremolite-self-learner",
     "crates/tremolite-compress",
     "crates/tremolite-packaging",
 ]
