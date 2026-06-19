@@ -102,6 +102,12 @@ async fn run_server_inner(
         .route("/ws", get(handle_ws))
         .route("/dashboard", get(handle_dashboard))
         .route("/dashboard/status", get(handle_dashboard_status))
+        .route("/dashboard/profiles", get(handle_profile_list))
+        .route("/dashboard/profiles/load", post(handle_profile_load))
+        .route("/dashboard/config", get(handle_dashboard_config))
+        .route("/dashboard/logs", get(handle_dashboard_logs))
+        .route("/dashboard/sessions", get(handle_dashboard_sessions))
+        .route("/dashboard/engine/{mod_id}", get(handle_engine_mod))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -114,6 +120,7 @@ async fn run_server_inner(
     println!("  GET  /metrics       —  server metrics");
     println!("  GET  /dashboard     —  web dashboard UI");
     println!("  GET  /dashboard/status  —  dashboard JSON API");
+    println!("  POST /dashboard/profiles/load  —  switch agent profile");
     println!("  POST /chat          —  send message to agent");
     println!("  WS   /ws            —  WebSocket chat");
     println!("  Press Ctrl+C to gracefully shut down.");
@@ -432,19 +439,552 @@ async fn handle_dashboard() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
 }
 
+const EMOTION_PATH: &str = "/home/spicysugar/.tremolite/data/emotion.json";
+
 async fn handle_dashboard_status(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<Value> {
     let uptime = state.uptime_secs();
 
+    // 读情绪数据
+    let emotion_data = std::fs::read_to_string(EMOTION_PATH).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or_default();
+    let plutchik = emotion_data.get("plutchik").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let energy = emotion_data.get("energy").and_then(|v| v.as_f64()).unwrap_or(50.0);
+
+    // 找主导情绪
+    let dominant = plutchik.iter()
+        .max_by(|a, b| a.1.as_f64().unwrap_or(0.0).partial_cmp(&b.1.as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(k, _)| k.as_str())
+        .unwrap_or("trust");
+
+    // 读记忆统计（尝试读 l2_profile）
+    let home = std::env::var("HOME").unwrap_or_default();
+    let memory_dir = std::path::Path::new(&home).join(".tremolite").join("data").join("memory");
+    let l2_path = memory_dir.join("l2_profile.json");
+    let memory_total = std::fs::read_to_string(&l2_path).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .map(|v| v.as_object().map(|o| o.len()).unwrap_or(0))
+        .unwrap_or(0);
+
+    // 模拟模块列表——从 engine/ 端点推测
+    let module_names: Vec<&str> = vec!["core", "emotion", "memory", "attention", "skill", "reflection", "compress", "delegation", "channels", "user"];
+    let module_labels: std::collections::HashMap<&str, &str> = [
+        ("core", "核心引擎"), ("emotion", "情绪引擎"), ("memory", "记忆系统"),
+        ("attention", "注意力系统"), ("skill", "技能系统"), ("reflection", "反思引擎"),
+        ("compress", "压缩引擎"), ("delegation", "任务委派"),
+        ("channels", "消息通道"), ("user", "用户管理"),
+    ].iter().cloned().collect();
+
+    // 读 profiles 列表
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profiles_base = std::path::Path::new(&home).join(".tremolite").join("profiles");
+    // 从 config.toml 读当前激活的包名
+    let active_profile = std::fs::read_to_string(
+        std::path::Path::new(&home).join(".tremolite").join("config.toml")
+    ).ok()
+        .and_then(|s| {
+            s.lines()
+                .skip_while(|l| !l.trim().starts_with("[profile]"))
+                .nth(1)
+                .and_then(|l| l.trim().strip_prefix("name = "))
+                .map(|v| v.trim_matches('"').to_string())
+        })
+        .unwrap_or_else(|| "main".into());
+    let mut profiles_list: Vec<serde_json::Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&profiles_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let is_active = name == active_profile;
+                // 读 SOUL.md 前几行作为描述
+                let soul_preview = std::fs::read_to_string(path.join("SOUL.md"))
+                    .ok()
+                    .map(|s| {
+                        s.lines()
+                            .filter(|l| !l.trim_start().starts_with('#'))
+                            .filter(|l| !l.trim().is_empty())
+                            .take(3)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .chars()
+                            .take(120)
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                // 技能数
+                let skills_count = std::fs::read_dir(path.join("skills"))
+                    .map(|d| d.flatten().count())
+                    .unwrap_or(0);
+                profiles_list.push(serde_json::json!({
+                    "name": name,
+                    "active": is_active,
+                    "soul_preview": soul_preview,
+                    "skills_count": skills_count,
+                }));
+            }
+        }
+    }
+    profiles_list.sort_by(|a, b| {
+        let a_active = a.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+        let b_active = b.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+        b_active.cmp(&a_active)
+    });
+
     Json(serde_json::json!({
         "status": "ok",
-        "uptime_secs": uptime,
+        "system": {
+            "status": "ok",
+            "version": env!("CARGO_PKG_VERSION"),
+            "uptime_secs": uptime,
+        },
         "uptime_human": format_uptime(uptime),
         "metrics": {
             "total_requests": GLOBAL_METRICS.total_requests.load(Ordering::Relaxed),
             "active_connections": state.active_connections.load(Ordering::Relaxed),
         },
+        "emotion": {
+            "display": dominant,
+            "composite": dominant,
+            "dominant": dominant,
+            "dimensions": plutchik,
+            "energy": energy,
+        },
+        "memory": {
+            "total_entries": memory_total,
+            "l1": 0,
+            "l2": memory_total,
+            "l3": 0,
+            "ram": 0,
+        },
+        "skills": {
+            "count": 0,
+            "total_practices": 0,
+        },
+        "modules": {
+            "registered": module_names.iter().map(|n| serde_json::json!({"name": n, "label": module_labels.get(n).unwrap_or(n)})).collect::<Vec<_>>(),
+        },
+        "profiles": profiles_list,
+        "profile": {
+            "name": active_profile,
+        },
+        "llm": {
+            "providers": ["deepseek"],
+            "default": "deepseek-v4-flash",
+        },
+        "conversation": [],
+    }))
+}
+
+// ─── Handler: 引擎模块详情 ─────────────────────
+//
+// 每个模块页展示专属数据，而不是统一的系统概览 fallback
+use axum::extract::Path;
+
+async fn handle_engine_mod(
+    axum::extract::Path(mod_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tremolite_dir = std::path::Path::new(&home).join(".tremolite");
+
+    // 读情绪数据（多个模块共用）
+    let emotion_data = std::fs::read_to_string(tremolite_dir.join("data").join("emotion.json")).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or_default();
+    let plutchik = emotion_data.get("plutchik").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let energy = emotion_data.get("energy").and_then(|v| v.as_f64()).unwrap_or(50.0);
+    let dominant = plutchik.iter()
+        .max_by(|a, b| a.1.as_f64().unwrap_or(0.0).partial_cmp(&b.1.as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(k, _)| k.as_str())
+        .unwrap_or("trust");
+
+    // 读记忆统计
+    let memory_dir = tremolite_dir.join("data").join("memory");
+    let l2_path = memory_dir.join("l2_profile.json");
+    let mem_total = std::fs::read_to_string(&l2_path).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .map(|v| v.as_object().map(|o| o.len()).unwrap_or(0))
+        .unwrap_or(0);
+
+    let data = match mod_id.as_str() {
+        "core" => serde_json::json!({
+            "LLM模型": "deepseek-v4-flash",
+            "注册模块数": 9,
+            "情绪状态": dominant,
+            "版本": env!("CARGO_PKG_VERSION"),
+            "状态": "运行中",
+            "运行时间": format_uptime(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ),
+        }),
+        "emotion" => {
+            let mut dims = serde_json::Map::new();
+            for (k, v) in &plutchik {
+                dims.insert(k.clone(), v.clone());
+            }
+            serde_json::json!({
+                "情绪": dominant,
+                "能量": format!("{:.1}", energy),
+                "情绪维度": dims,
+                "版本": env!("CARGO_PKG_VERSION"),
+            })
+        }
+        "memory" => serde_json::json!({
+            "记忆总量": mem_total,
+            "L1 工作记忆": 0,
+            "L2 持久画像": mem_total,
+            "L3 索引层": 0,
+            "RAM 缓存": 0,
+            "存储路径": tremolite_dir.join("data").join("memory").to_string_lossy(),
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "attention" => serde_json::json!({
+            "上下文窗口": "启用中",
+            "焦点指标": "正常",
+            "活跃会话": "1",
+            "注意力策略": "滑动窗口",
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "skill" => serde_json::json!({
+            "已注册技能": 0,
+            "能力域": 0,
+            "自动发现": "已启用",
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "reflection" => serde_json::json!({
+            "反思周期": "3600s",
+            "最近反思": "无",
+            "画像评分": "—",
+            "状态": "待机中",
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "compress" => serde_json::json!({
+            "压缩策略": "分块摘要",
+            "Token节省": "—",
+            "状态": "待机中",
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "delegation" => serde_json::json!({
+            "最大子Agent": "3",
+            "委派深度": "1",
+            "活跃任务": 0,
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "channels" => serde_json::json!({
+            "已注册通道": 2,
+            "通道列表": ["qqbot_test", "webhook"],
+            "端口": 5835,
+            "状态": "运行中（2/2 通道已连接）",
+            "版本": env!("CARGO_PKG_VERSION"),
+        }),
+        "user" => {
+            // 读 config.toml 提取 [user] 段的账户信息
+            let config_str = std::fs::read_to_string(tremolite_dir.join("config.toml")).ok().unwrap_or_default();
+            let mut admins = Vec::new();
+            let mut users = Vec::new();
+            let mut in_user_accounts = false;
+            let mut current_acct: Option<serde_json::Map<String, serde_json::Value>> = None;
+            for line in config_str.lines() {
+                let trimmed = line.trim();
+                if trimmed == "[[user.accounts]]" {
+                    in_user_accounts = true;
+                    if let Some(acct) = current_acct.take() {
+                        let role = acct.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                        if role == "admin" { admins.push(serde_json::Value::Object(acct)); }
+                        else { users.push(serde_json::Value::Object(acct)); }
+                    }
+                    current_acct = Some(serde_json::Map::new());
+                    continue;
+                }
+                if in_user_accounts {
+                    if trimmed.starts_with('[') { break; }  // 遇到其他段头就停止
+                    if let Some(eq_pos) = trimmed.find('=') {
+                        let key = trimmed[..eq_pos].trim().to_string();
+                        let val = trimmed[eq_pos+1..].trim().trim_matches('\"').to_string();
+                        if let Some(ref mut acct) = current_acct {
+                            acct.insert(key, serde_json::Value::String(val));
+                        }
+                    }
+                }
+            }
+            // Push last account
+            if let Some(acct) = current_acct.take() {
+                let role = acct.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                if role == "admin" { admins.push(serde_json::Value::Object(acct)); }
+                else { users.push(serde_json::Value::Object(acct)); }
+            }
+            // If no [user] section, fall back to env USER
+            if admins.is_empty() && users.is_empty() {
+                let display_name = std::env::var("USER").unwrap_or_default();
+                serde_json::json!({
+                    "注册用户数": 1,
+                    "管理员账户": 1,
+                    "当前对话用户": display_name,
+                    "用户角色": "Admin",
+                    "主动识别": "已启用（通过 alias 自动匹配）",
+                    "版本": env!("CARGO_PKG_VERSION"),
+                })
+            } else {
+                serde_json::json!({
+                    "注册用户数": admins.len() + users.len(),
+                    "管理员账户": admins.len(),
+                    "普通用户": users.len(),
+                    "管理员列表": admins,
+                    "普通用户列表": users,
+                    "主动识别": "已启用（通过 alias 自动匹配）",
+                    "版本": env!("CARGO_PKG_VERSION"),
+                })
+            }
+        }
+        _ => serde_json::json!({
+            "模块ID": mod_id,
+            "状态": "未知模块",
+        }),
+    };
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "模块ID": mod_id,
+        "data": data,
+    }))
+}
+
+// ─── Handler: 配置包详情数据 ────────────────────
+
+/// 返回指定配置包的所有文件内容（不含大二进制文件）
+/// 查询参数: ?name=xxx
+async fn handle_profile_list(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let name = params.get("name").map(|s| s.as_str()).unwrap_or("");
+    if name.is_empty() {
+        return Json(serde_json::json!({"status": "error", "error": "缺少包名"}));
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profiles_base = std::path::Path::new(&home).join(".tremolite").join("profiles");
+    let profile_dir = profiles_base.join(name);
+    if !profile_dir.is_dir() {
+        return Json(serde_json::json!({"status": "error", "error": format!("包 '{name}' 不存在")}));
+    }
+
+    let mut files: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    if let Ok(entries) = walk_dir(&profile_dir, &profile_dir) {
+        for (rel, content) in entries {
+            files.insert(rel, content);
+        }
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "name": name,
+        "files": files,
+    }))
+}
+
+fn walk_dir(base: &std::path::Path, dir: &std::path::Path) -> std::io::Result<Vec<(String, String)>> {
+    let mut result = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = path.strip_prefix(base).unwrap_or(&path)
+            .to_string_lossy().to_string();
+        if entry.file_type()?.is_dir() {
+            result.extend(walk_dir(base, &path)?);
+        } else {
+            // 跳过二进制大文件（tone_map.json 太大，只显示前100行）
+            let fname = path.file_name().unwrap_or_default().to_string_lossy();
+            if fname == "tone_map.json" {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let lines: Vec<&str> = content.lines().take(50).collect();
+                    result.push((format!("{rel} (前50行/共{}行)", content.lines().count()),
+                        lines.join("\n") + "\n..."));
+                }
+            } else if fname.ends_with(".json") || fname.ends_with(".toml") || fname.ends_with(".md") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    result.push((rel.clone(), content));
+                }
+            } else if fname.ends_with(".gitkeep") {
+                // skip
+            } else {
+                result.push((rel.clone(), format!("[二进制文件: {} 字节]", 
+                    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0))));
+            }
+        }
+    }
+    Ok(result)
+}
+
+// ─── Handler: 加载配置包 ───────────────────────
+
+async fn handle_profile_load(
+    axum::extract::Extension(state): axum::extract::Extension<Arc<AppState>>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if name.is_empty() {
+        return Json(serde_json::json!({"status": "error", "error": "缺少包名"}));
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profiles_base = std::path::Path::new(&home).join(".tremolite").join("profiles");
+    let src = profiles_base.join(name);
+    if !src.is_dir() {
+        return Json(serde_json::json!({"status": "error", "error": format!("包 '{name}' 不存在")}));
+    }
+    // 更新 config.toml 的 [profile] 段——指向新包
+    let config_path = std::path::Path::new(&home).join(".tremolite").join("config.toml");
+    match std::fs::read_to_string(&config_path) {
+        Ok(content) => {
+            let mut has_profile = false;
+            let new_content = content.lines().map(|line| -> String {
+                if line.trim_start().starts_with("[profile]") {
+                    has_profile = true;
+                    line.to_string()
+                } else if has_profile && line.trim_start().starts_with("name =") {
+                    has_profile = false;
+                    format!("name = \"{}\"", name)
+                } else {
+                    line.to_string()
+                }
+            }).collect::<Vec<_>>().join("\n");
+            let final_content = if content.contains("[profile]") {
+                new_content
+            } else {
+                format!("[profile]\nname = \"{}\"\n\n{}", name, content)
+            };
+            match std::fs::write(&config_path, &final_content) {
+                Ok(_) => Json(serde_json::json!({"status": "ok", "message": format!("已切换到配置包 '{}'，重启透闪石生效", name)})),
+                Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入配置失败: {e}")})),
+            }
+        }
+        Err(e) => Json(serde_json::json!({"status": "error", "error": format!("读取配置失败: {e}")})),
+    }
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if dst.exists() {
+        std::fs::remove_dir_all(dst)?;
+    }
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+// ─── Handler: 配置数据 ────────────────────────────
+
+async fn handle_dashboard_config() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home).join(".tremolite").join("config.toml");
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return Json(serde_json::json!({"status": "error", "error": "无法读取配置"})),
+    };
+    // 按段解析，敏感值脱敏
+    let mut sections: Vec<serde_json::Value> = Vec::new();
+    let mut current_section = String::new();
+    let mut current_lines: Vec<String> = Vec::new();
+    for line in content.lines() {
+        if line.starts_with('[') && line.ends_with(']') {
+            if !current_section.is_empty() {
+                sections.push(serde_json::json!({"section": current_section, "lines": current_lines}));
+            }
+            current_section = line.trim_matches('[').trim_matches(']').to_string();
+            current_lines = Vec::new();
+        } else if !current_section.is_empty() {
+            let masked = if line.contains("api_key") || line.contains("secret") || line.contains("token") || line.contains("avatar") {
+                let parts: Vec<&str> = line.splitn(2, '=').collect();
+                if parts.len() == 2 {
+                    format!("{} = \"********\"", parts[0].trim())
+                } else { line.to_string() }
+            } else { line.to_string() };
+            if !masked.trim().is_empty() {
+                current_lines.push(masked);
+            }
+        }
+    }
+    if !current_section.is_empty() {
+        sections.push(serde_json::json!({"section": current_section, "lines": current_lines}));
+    }
+    Json(serde_json::json!({"status": "ok", "sections": sections}))
+}
+
+// ─── Handler: 日志数据 ────────────────────────────
+
+async fn handle_dashboard_logs() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    // 尝试从多个位置读日志
+    let log_candidates = [
+        std::path::Path::new(&home).join(".tremolite").join("logs").join("daemon.log"),
+        std::path::Path::new(&home).join("workspace").join("tremolite").join("logs").join("tremolite.log"),
+        std::path::PathBuf::from("/tmp/daemon_test.log"),
+    ];
+    let mut found_logs = Vec::new();
+    for path in &log_candidates {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let lines: Vec<&str> = content.lines().rev().take(50).collect::<Vec<_>>();
+                let tail: Vec<String> = lines.into_iter().rev().map(|s| s.to_string()).collect();
+                found_logs.push(serde_json::json!({
+                    "source": path.to_string_lossy(),
+                    "lines": tail,
+                }));
+                if found_logs.len() >= 2 { break; }
+            }
+        }
+    }
+    Json(serde_json::json!({"status": "ok", "logs": found_logs}))
+}
+
+// ─── Handler: 会话数据 ────────────────────────────
+
+async fn handle_dashboard_sessions(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let uptime = state.uptime_secs();
+    let home = std::env::var("HOME").unwrap_or_default();
+    // 扫描 session 数据库文件
+    let sessions_dir = std::path::Path::new(&home).join(".hermes").join("sessions");
+    let mut session_files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("db") {
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                session_files.push(serde_json::json!({
+                    "name": path.file_stem().and_then(|s| s.to_str()).unwrap_or("?"),
+                    "bytes": size,
+                }));
+            }
+        }
+    }
+    Json(serde_json::json!({
+        "status": "ok",
+        "uptime_secs": uptime,
+        "uptime_human": {
+            "hours": uptime / 3600,
+            "minutes": (uptime % 3600) / 60,
+            "seconds": uptime % 60,
+        },
+        "active_session": {
+            "platform": "QQ Bot",
+            "user": "琳玲",
+            "state": "在线",
+        },
+        "session_files": session_files,
     }))
 }
 

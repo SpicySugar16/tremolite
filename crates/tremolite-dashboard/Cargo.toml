@@ -1,6 +1,6 @@
 [package]
 name = "tremolite-dashboard"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "透闪石仪表盘模块 — 给 gateway 的图形化界面插件"
 

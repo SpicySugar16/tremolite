@@ -1,0 +1,9 @@
+# 通道绑定——这个 agent 连哪些通道
+# 引用 ~/.tremolite/config.toml 中的通道定义，绑定到具体的群/私聊
+[qqbot]
+enabled = true
+app_id = "${QQ_APP_ID}"
+
+[webhook]
+enabled = true
+listen = "0.0.0.0:9091"

@@ -43,6 +43,114 @@ pub struct Config {
     /// MCP 服务器配置
     #[serde(default)]
     pub mcp: McpConfig,
+    /// 当前激活的 agent 配置包
+    #[serde(default)]
+    pub profile: ProfileConfig,
+}
+
+/// 配置包（Profile）——一个 agent 的全部独属数据
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileConfig {
+    /// 当前激活的包名，对应 ~/.tremolite/profiles/<name>/
+    #[serde(default = "default_profile_name")]
+    pub name: String,
+}
+
+fn default_profile_name() -> String {
+    "main".into()
+}
+
+impl Default for ProfileConfig {
+    fn default() -> Self {
+        Self { name: default_profile_name() }
+    }
+}
+
+impl ProfileConfig {
+    /// 返回当前激活包的根目录：~/.tremolite/profiles/<name>/
+    pub fn path(&self) -> PathBuf {
+        PathBuf::from(expand_tilde(&format!("~/.tremolite/profiles/{}", self.name)))
+    }
+
+    /// SOUL.md 路径
+    pub fn soul_path(&self) -> PathBuf {
+        self.path().join("SOUL.md")
+    }
+
+    /// 变量文件 variables.toml
+    pub fn variables_path(&self) -> PathBuf {
+        self.path().join("variables.toml")
+    }
+
+    /// 情绪映射表
+    pub fn tone_map_path(&self) -> PathBuf {
+        self.path().join("tone_map.json")
+    }
+
+    /// 情绪状态文件
+    pub fn emotion_path(&self) -> PathBuf {
+        self.path().join("emotion.json")
+    }
+
+    /// 用户画像目录
+    pub fn users_dir(&self) -> PathBuf {
+        self.path().join("users")
+    }
+
+    /// 某个用户的画像文件
+    pub fn user_path(&self, user_id: &str) -> PathBuf {
+        self.users_dir().join(format!("{}.toml", user_id))
+    }
+
+    /// 记忆目录
+    pub fn memory_dir(&self) -> PathBuf {
+        self.path().join("memory")
+    }
+
+    /// L2 画像记忆
+    pub fn l2_profile_path(&self) -> PathBuf {
+        self.memory_dir().join("l2_profile.json")
+    }
+
+    /// L2 嵌入式向量
+    pub fn l2_embeddings_path(&self) -> PathBuf {
+        self.memory_dir().join("l2_embeddings.json")
+    }
+
+    /// 技能目录
+    pub fn skills_dir(&self) -> PathBuf {
+        self.path().join("skills")
+    }
+
+    /// 通道绑定配置
+    pub fn channels_path(&self) -> PathBuf {
+        self.path().join("channels.toml")
+    }
+
+    /// 提示词模板目录
+    pub fn prompts_dir(&self) -> PathBuf {
+        self.path().join("prompts")
+    }
+
+    /// 偏好配置
+    pub fn prefs_path(&self) -> PathBuf {
+        self.path().join("prefs.toml")
+    }
+
+    /// 黑名单
+    pub fn blacklist_path(&self) -> PathBuf {
+        self.path().join("blacklist.toml")
+    }
+
+    /// 各模块的个性化配置目录
+    pub fn modules_config_dir(&self) -> PathBuf {
+        self.path().join("modules")
+    }
+
+    /// 某个模块的个性化配置
+    pub fn module_config_path(&self, module_id: &str) -> PathBuf {
+        self.modules_config_dir().join(format!("{}.toml", module_id))
+    }
 }
 
 /// 核心配置
@@ -212,6 +320,7 @@ impl Default for Config {
             channels: HashMap::new(),
             cron: CronConfig::default(),
             mcp: McpConfig::default(),
+            profile: ProfileConfig::default(),
         }
     }
 }

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>透闪石 Tremolite · Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;
+  --fg:#e6edf3;--fg2:#8b949e;--fg3:#6e7681;
+  --accent:#66ccff;--accent2:#99ddff;--accent-dim:#66ccff22;--accent-border:#66ccff44;
+  --border:#30363d;--border2:#21262d;
+  --green:#3fb950;--red:#f85149;--yellow:#d29922;
+  --font:-apple-system,'SF Pro','Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'SF Mono','Cascadia Code','JetBrains Mono',monospace;
+  --radius:8px;--radius-sm:4px;
+}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);min-height:100vh}
+.topbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:10px}
+.topbar h1{color:var(--accent);font-size:1.1rem;font-weight:600}
+.topbar .badge{display:inline-block;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);border-radius:12px;padding:2px 10px;font-size:0.72rem}
+.topbar .sub{color:var(--fg2);font-size:0.75rem;margin-left:auto}
+.layout{display:grid;grid-template-columns:200px 1fr;height:calc(100vh - 46px)}
+.sidebar{background:var(--bg2);border-right:1px solid var(--border);padding:10px 0;overflow-y:auto}
+.sidebar .sep{border-top:1px solid var(--border);margin:6px 12px}
+.nav-item{padding:7px 16px;cursor:pointer;font-size:0.82rem;color:var(--fg2);transition:all 0.15s;display:flex;align-items:center;gap:6px}
+.nav-item:hover{background:var(--accent-dim);color:var(--fg)}
+.nav-item.active{background:var(--accent-dim);color:var(--accent);border-right:2px solid var(--accent)}
+.nav-item .ico{font-size:0.9rem;width:18px;text-align:center}
+.nav-item .ver{font-size:0.62rem;color:var(--fg3);margin-left:auto}
+.content{overflow-y:auto;padding:16px 20px}
+.card{background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+.card-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.card-hd h3{color:var(--accent);font-size:0.78rem;text-transform:uppercase;letter-spacing:0.5px}
+.row{display:flex;justify-content:space-between;padding:4px 0;font-size:0.82rem}
+.row .l{color:var(--fg2)}
+.row .v{color:var(--fg);font-weight:500}
+.badge-accent{display:inline-block;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);border-radius:12px;padding:2px 10px;font-size:0.78rem}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{background:var(--bg3);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 14px;cursor:pointer;font-size:0.78rem;transition:all 0.15s}
+.btn:hover{background:var(--accent-dim);border-color:var(--accent-border);color:var(--accent)}
+.btn.sm{padding:4px 10px;font-size:0.72rem}
+.btn.accent{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+.loading{color:var(--fg2);font-size:0.82rem;text-align:center;padding:20px}
+.error{color:var(--red);font-size:0.82rem;text-align:center;padding:20px}
+.chat-log{border:1px solid var(--border2);border-radius:var(--radius);padding:10px;max-height:400px;overflow-y:auto;font-size:0.82rem;margin-bottom:10px}
+.chat-entry{padding:5px 0;border-bottom:1px solid var(--bg3)}
+.chat-entry:last-child{border:none}
+.chat-entry .sender{color:var(--accent);font-weight:600;font-size:0.78rem}
+.chat-entry .text{color:var(--fg);margin-top:2px;line-height:1.4}
+.chat-entry.user .sender{color:var(--green)}
+.chat-input{display:flex;gap:8px}
+.chat-input input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;color:var(--fg);font-size:0.85rem;outline:none}
+.chat-input input:focus{border-color:var(--accent)}
+.chat-input button{background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);padding:8px 16px;font-weight:600;cursor:pointer;font-size:0.85rem}
+.chat-input button:hover{background:var(--accent2)}
+.module-list{font-size:0.78rem;display:flex;flex-wrap:wrap;gap:4px}
+.module-list .mod{display:inline-block;background:var(--bg3);border-radius:var(--radius-sm);padding:2px 8px;color:var(--fg2);font-size:0.72rem}
+.module-list .mod.active{background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:var(--border);border-radius:2px;outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid var(--bg);cursor:pointer;margin-top:-4.5px}
+input[type=number]{font-family:var(--mono);font-size:0.72rem;width:38px;height:20px;padding:1px 2px;text-align:center;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--fg);-moz-appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.toggle{position:relative;display:inline-block;width:32px;height:18px}
+.toggle input{opacity:0;width:0;height:0}
+.toggle .sl{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:var(--bg3);border-radius:18px;transition:0.2s;border:1px solid var(--border)}
+.toggle .sl:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background:var(--fg2);border-radius:50%;transition:0.2s}
+.toggle input:checked+.sl{background:var(--accent-dim);border-color:var(--accent-border)}
+.toggle input:checked+.sl:before{background:var(--accent);transform:translateX(14px)}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>✦ 透闪石</h1>
+  <span class="badge" id="statusBadge">connecting</span>
+  <span class="sub" id="uptimeDisplay"></span>
+  <button class="btn sm" onclick="location.reload()" style="font-size:0.7rem">↻</button>
+</div>
+<div class="layout">
+  <div class="sidebar" id="sidebar"></div>
+  <div class="content" id="pageContent"><div class="loading">载入中...</div></div>
+</div>
+
+<script>
+// ─── API helpers ────
+async function api(path){const r=await fetch(path);return r.json()}
+async function apiPost(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});return r.json()}
+async function apiPut(path,body){const r=await fetch(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});return r.json()}
+
+// ─── Escape ────
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+// ─── Uptime ────
+function fmtUptime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;if(h>0)return h+'h '+m+'m';if(m>0)return m+'m '+sec+'s';return sec+'s'}
+
+// ─── Navigation ────
+const NAV_BASE=[
+  {id:'status',ico:'\u25C9',label:'状态'},
+  {id:'config',ico:'\u2699',label:'配置'},
+  {id:'sessions',ico:'\u2630',label:'会话'},
+  {id:'logs',ico:'\u2261',label:'日志'},
+  {id:'chat',ico:'\uD83D\uDCAC',label:'对话'},
+  {id:'profiles',ico:'\uD83D\uDCE6',label:'配置包'},
+];
+let currentPage='status',currentParam=null;
+
+function navigate(page,param){
+  currentPage=page;currentParam=param||null;
+  location.hash='#'+page+(param?':'+param:'');
+  renderNav();renderContent();
+}
+
+function renderNav(){
+  const el=document.getElementById('sidebar');
+  let html='';
+  for(const n of NAV_BASE){
+    html+='<div class="nav-item'+(currentPage===n.id?' active':'')+'" onclick="navigate(\''+n.id+'\')"><span class="ico">'+n.ico+'</span>'+esc(n.label)+'</div>';
+  }
+  html+='<div class="sep"></div>';
+  // Dynamic modules
+  api('/dashboard/status').then(d=>{
+    const mods=d.modules||{};
+    const registered=mods.registered||[];
+    for(const m of registered){
+      const isAct=currentPage==='module'&&currentParam===m.name;
+      html+=('<div class="nav-item'+(isAct?' active':'')+'" onclick="navigate(\'module\',\''+esc(m.name)+'\')"><span class="ico">\u25C9</span>'+esc(m.label||m.name)+'</div>');
+    }
+    el.innerHTML=html;
+  }).catch(()=>{el.innerHTML=html+'<div class="loading">无模块</div>'});
+}
+
+// ─── Pages ────
+async function renderContent(){
+  const el=document.getElementById('pageContent');
+  // Pre-fetch status data for all pages
+  let statusData={};
+  try{ statusData=await api('/dashboard/status'); }catch(e){}
+  const s=statusData.system||{};
+  document.getElementById('statusBadge').textContent=s.status||'ok';
+  document.getElementById('uptimeDisplay').textContent='v'+(s.version||'?')+' · '+fmtUptime(s.uptime_secs||0);
+  
+  switch(currentPage){
+    case 'status': await renderStatus(el,statusData);break;
+    case 'chat': await renderChat(el,statusData);break;
+    case 'config': await renderConfig(el,statusData);break;
+    case 'sessions': await renderSessions(el,statusData);break;
+    case 'logs': await renderLogs(el,statusData);break;
+    case 'profiles': 
+      if(currentParam) await renderProfileDetail(el,currentParam);
+      else await renderProfiles(el,statusData);
+    break;
+
+    case 'module': await renderModule(el,currentParam,statusData);break;
+    default: el.innerHTML='<div class="card"><div class="loading">未知页面: '+esc(currentPage)+'</div></div>';
+  }
+}
+
+// ─── Status Page ────
+async function renderStatus(el,d){
+  try{
+    const ec=d.emotion||{};
+    const mc=d.memory||{};
+    const sc=d.skills||{};
+    const mods=d.modules||{};
+    const lc=d.llm||{};
+
+    let html='<div class="grid-2">';
+    // Emotion card
+    html+='<div class="card"><div class="card-hd"><h3>\uD83E\uDDE0 情绪</h3></div>'+
+      '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+(ec.display||'?')+'</span></span></div>'+
+      '<div class="row"><span class="l">复合</span><span class="v">'+(ec.composite||'-')+'</span></div>'+
+      '<div class="row"><span class="l">主导</span><span class="v">'+(ec.dominant||'-')+'</span></div></div>';
+    // Memory card
+    html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDCBE 记忆</h3></div>'+
+      '<div class="row"><span class="l">总计</span><span class="v">'+(mc.total_entries||0)+'</span></div>'+
+      '<div class="row"><span class="l">L1 / L2 / L3</span><span class="v">'+(mc.l1||0)+' / '+(mc.l2||0)+' / '+(mc.l3||0)+'</span></div>'+
+      '<div class="row"><span class="l">RAM</span><span class="v">'+(mc.ram||0)+'</span></div></div>';
+    html+='</div><div class="grid-2">';
+    // Skills card
+    html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDCDA 学习</h3></div>'+
+      '<div class="row"><span class="l">技能</span><span class="v">'+(sc.count||0)+'</span></div>'+
+      '<div class="row"><span class="l">练习</span><span class="v">'+(sc.total_practices||0)+'</span></div></div>';
+    // Modules card
+    const reg=(mods.registered||[]).map(m=>'<span class="mod active">'+esc(m.label||m.name)+'</span>').join('');
+    html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDD0C 模块</h3></div>'+
+      '<div class="module-list">'+(reg||'<span style="color:var(--fg3)">无</span>')+'</div></div>';
+    html+='</div><div class="grid-2">';
+    // LLM card
+    html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDD17 LLM</h3></div>'+
+      '<div class="row"><span class="l">提供者</span><span class="v">'+((lc.providers||[]).join(', ')||'无')+'</span></div>'+
+      '<div class="row"><span class="l">默认</span><span class="v">'+(lc.default||'离线')+'</span></div></div>';
+    // Metrics card
+    const mtx=d.metrics||{};
+    html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDCCA 指标</h3></div>'+
+      '<div class="row"><span class="l">请求数</span><span class="v">'+(mtx.total_requests||0)+'</span></div>'+
+      '<div class="row"><span class="l">活跃连接</span><span class="v">'+(mtx.active_connections||0)+'</span></div></div>';
+    html+='</div>';
+    el.innerHTML=html;
+  }catch(e){
+    el.innerHTML='<div class="error">加载失败: '+esc(e.message)+'</div>';
+  }
+}
+
+// ─── Chat Page ────
+let chatCount=0;
+async function renderChat(el){
+  el.innerHTML='<div class="card"><div class="card-hd"><h3>\uD83D\uDCAC 对话</h3></div>'+
+    '<div class="chat-log" id="chatLog"><div class="loading">等待数据...</div></div>'+
+    '<div class="chat-input"><input id="chatInput" placeholder="输入消息，按 Enter 发送..." />'+
+    '<button onclick="sendMessage()">发送</button></div></div>';
+  // Try to load conversation history
+  try{
+    const d=await api('/dashboard/status');
+    const conv=d.conversation||[];
+    if(conv.length>0){
+      const logEl=document.getElementById('chatLog');
+      logEl.innerHTML=conv.slice(-20).map(m=>{
+        const isU=(m.content||'').startsWith('kamisama: ');
+        return '<div class="chat-entry'+(isU?' user':'')+'"><span class="sender">'+(isU?'神大人':'葵')+'</span><div class="text">'+esc((m.content||'').substring(isU?9:2))+'</div></div>';
+      }).join('');
+      chatCount=conv.length;
+    }
+  }catch(e){}
+}
+
+window.sendMessage=async function(){
+  const inp=document.getElementById('chatInput'),txt=inp.value.trim();
+  if(!txt)return;inp.value='';
+  const el=document.getElementById('chatLog');
+  el.innerHTML+='<div class="chat-entry user"><span class="sender">神大人</span><div class="text">'+esc(txt)+'</div></div>';
+  el.scrollTop=el.scrollHeight;
+  try{
+    const d=await apiPost('/chat',{message:txt});
+    el.innerHTML+='<div class="chat-entry"><span class="sender">葵</span><div class="text">'+esc(d.response||'[无响应]')+'</div></div>';
+  }catch(e){
+    el.innerHTML+='<div class="chat-entry"><span class="sender" style="color:var(--red)">系统</span><div class="text" style="color:var(--red)">发送失败</div></div>';
+  }
+  el.scrollTop=el.scrollHeight;
+};
+
+// ─── Sessions Page ────
+async function renderSessions(el,d){
+  const ec=d.emotion||{};
+  const mc=d.memory||{};
+  let html='<div class="card"><div class="card-hd"><h3>\u2630 会话</h3></div><div class="loading">加载中...</div></div>';
+  el.innerHTML=html;
+  try{
+    const r=await api('/dashboard/sessions');
+    if(r.status==='ok'){
+      const act=r.active_session||{};
+      const files=r.session_files||[];
+      html='<div class="card"><div class="card-hd"><h3>\u2630 会话</h3></div>'+
+        '<div class="grid-2">'+
+        '<div class="card"><div class="card-hd"><h3>当前</h3></div>'+
+        '<div class="row"><span class="l">平台</span><span class="v">'+(act.platform||'-')+'</span></div>'+
+        '<div class="row"><span class="l">用户</span><span class="v">'+(act.user||'-')+'</span></div>'+
+        '<div class="row"><span class="l">状态</span><span class="v">'+(act.state||'-')+'</span></div>'+
+        '<div class="row"><span class="l">运行</span><span class="v">'+(r.uptime_human?r.uptime_human.hours+'h '+r.uptime_human.minutes+'m':'?')+'</span></div></div>'+
+        '<div class="card"><div class="card-hd"><h3>概览</h3></div>'+
+        '<div class="row"><span class="l">会话文件</span><span class="v">'+files.length+'</span></div>'+
+        '<div class="row"><span class="l">记忆</span><span class="v">'+(mc.total_entries||0)+' 条</span></div>'+
+        '<div class="row"><span class="l">情绪</span><span class="v">'+(ec.display||'?')+'</span></div></div></div>';
+      if(files.length>0){
+        html+='<div class="card"><div class="card-hd"><h3>会话文件</h3></div><div style="font-size:0.72rem">';
+        for(const f of files.slice(0,10)){
+          const sz=f.bytes>1024?(f.bytes/1024).toFixed(1)+'KB':f.bytes+'B';
+          html+='<div class="row"><span class="l">'+esc(f.name)+'</span><span class="v">'+sz+'</span></div>';
+        }
+        html+='</div></div>';
+      }
+      el.innerHTML=html;
+    }
+  }catch(e){}
+}
+
+// ─── Logs Page ────
+async function renderLogs(el,d){
+  const s=d.system||{};
+  const mtx=d.metrics||{};
+  let html='<div class="card"><div class="card-hd"><h3>≡ 日志</h3></div><div class="loading">加载中...</div></div>';
+  el.innerHTML=html;
+  try{
+    const r=await api('/dashboard/logs');
+    if(r.status==='ok'){
+      html='<div class="card"><div class="card-hd"><h3>≡ 日志</h3></div>';
+      const logs=r.logs||[];
+      if(logs.length===0){
+        html+='<div style="color:var(--fg2);font-size:0.75rem;margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:var(--radius-sm)">暂无日志文件。</div>';
+      }
+      for(const log of logs){
+        html+='<div style="margin-bottom:8px"><div style="background:var(--bg3);padding:4px 8px;border-radius:var(--radius-sm) var(--radius-sm) 0 0;font-size:0.72rem;color:var(--fg2)">'+esc(log.source||'')+'</div>'+
+          '<pre style="background:var(--bg);border:1px solid var(--border2);border-top:none;padding:8px;font-size:0.68rem;font-family:var(--mono);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;margin:0;border-radius:0 0 var(--radius-sm) var(--radius-sm);color:var(--fg)">'+
+          esc((log.lines||[]).join('\n'))+'</pre></div>';
+      }
+      html+='<div class="grid-2"><div class="card"><div class="card-hd"><h3>运行</h3></div>'+
+        '<div class="row"><span class="l">版本</span><span class="v">v'+(s.version||'?')+'</span></div>'+
+        '<div class="row"><span class="l">运行</span><span class="v">'+fmtUptime(s.uptime_secs||0)+'</span></div>'+
+        '<div class="row"><span class="l">请求</span><span class="v">'+(mtx.total_requests||0)+'</span></div></div>'+
+        '<div class="card"><div class="card-hd"><h3>连接</h3></div>'+
+        '<div class="row"><span class="l">通道</span><span class="v">qqbot, webhook</span></div>'+
+        '<div class="row"><span class="l">端口</span><span class="v">5835</span></div>'+
+        '<div class="row"><span class="l">活跃</span><span class="v">'+(mtx.active_connections||0)+'</span></div></div></div></div>';
+      el.innerHTML=html;
+    }
+  }catch(e){}
+}
+
+// ─── Config Page ────
+async function renderConfig(el,d){
+  let html='<div class="card"><div class="card-hd"><h3>⚙ 配置</h3></div><div class="loading">加载中...</div></div>';
+  el.innerHTML=html;
+  try{
+    const r=await api('/dashboard/config');
+    if(r.status==='ok'){
+      const sections=r.sections||[];
+      html='<div class="card"><div class="card-hd"><h3>⚙ 配置</h3></div>';
+      for(const sec of sections){
+        html+='<div style="margin-bottom:8px;padding:8px;background:var(--bg2);border-radius:var(--radius-sm)">'+
+          '<strong style="color:var(--accent);font-size:0.78rem">'+esc(sec.section)+'</strong>';
+        for(const line of (sec.lines||[])){
+          html+='<div style="padding:2px 0;font-size:0.72rem;font-family:var(--mono);color:var(--fg2);word-break:break-all">'+esc(line)+'</div>';
+        }
+        html+='</div>';
+      }
+      html+='</div>';
+      el.innerHTML=html;
+    }
+  }catch(e){}
+}
+
+// ─── 配置包页面 ────
+async function renderProfiles(el,d){
+  const pf=d.profiles||[];
+  let html='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 配置包</h3></div>';
+  html+='<div style="color:var(--fg2);font-size:0.75rem;margin-bottom:10px">每个配置包是一组独立的灵魂设定和技能。点包名查看详情。</div>';
+  for(const p of pf){
+    const act=p.active?'<span style="color:var(--green);font-size:0.72rem">\u25C9 使用中</span>':'<span style="color:var(--fg3);font-size:0.72rem">\u25CB 未激活</span>';
+    const iCo=p.active?'\u2B50':'\uD83D\uDCE6';
+    html+='<div style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;border:1px solid '+(p.active?'var(--accent-border)':'var(--border)')+'">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
+      '<strong style="color:var(--accent);font-size:0.9rem;cursor:pointer" onclick="navigate(\'profiles\',\''+esc(p.name)+'\')">'+iCo+' '+esc(p.name)+'</strong>'+act+'</div>'+
+      '<div class="row"><span class="l">灵魂</span><span class="v" style="font-size:0.72rem;color:var(--fg2)">'+esc(p.soul_preview||'<无>')+'</span></div>'+
+      '<div class="row"><span class="l">技能</span><span class="v">'+(p.skills_count||0)+' 个</span></div>'+
+      (p.active?'':'<div style="margin-top:8px"><button class="btn sm" onclick="loadProfile(\''+esc(p.name)+'\')">加载</button></div>')+
+      '<div style="margin-top:6px"><button class="btn sm" onclick="navigate(\'profiles\',\''+esc(p.name)+'\')">\uD83D\uDCC2 查看详情</button></div>'+
+      '</div>';
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+// ─── 配置包详情页面 ────
+async function renderProfileDetail(el,name){
+  el.innerHTML='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 '+esc(name)+'</h3></div><div class="loading">加载中...</div><button class="btn sm" onclick="navigate(\'profiles\')" style="margin-top:8px">\u2190 返回列表</button></div>';
+  try{
+    const r=await api('/dashboard/profiles?name='+encodeURIComponent(name));
+    if(r.status!=='ok'){
+      el.innerHTML='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 '+esc(name)+'</h3></div><div class="error">加载失败</div><button class="btn sm" onclick="navigate(\'profiles\')" style="margin-top:8px">\u2190 返回列表</button></div>';
+      return;
+    }
+    const files=r.files||{};
+    let html='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 '+esc(name)+'</h3><button class="btn sm" onclick="navigate(\'profiles\')">\u2190 返回</button></div>';
+    for(const [path,content] of Object.entries(files)){
+      const ext=path.split('.').pop();
+      const isCode=ext==='toml'||ext==='json'||ext==='md';
+      html+='<div style="margin-bottom:8px">'+
+        '<div style="background:var(--bg3);padding:4px 8px;border-radius:var(--radius-sm) var(--radius-sm) 0 0;font-size:0.72rem;color:var(--fg2)">'+esc(path)+'</div>'+
+        (isCode?'<pre style="background:var(--bg);border:1px solid var(--border2);border-top:none;padding:8px;font-size:0.7rem;font-family:var(--mono);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;margin:0;border-radius:0 0 var(--radius-sm) var(--radius-sm)">'+esc(content)+'</pre>'
+        :'<div style="background:var(--bg);border:1px solid var(--border2);border-top:none;padding:8px;font-size:0.72rem;border-radius:0 0 var(--radius-sm) var(--radius-sm);color:var(--fg2)">'+esc(content)+'</div>')+
+        '</div>';
+    }
+    html+='</div>';
+    el.innerHTML=html;
+  }catch(e){
+    el.innerHTML='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 '+esc(name)+'</h3></div><div class="error">网络错误: '+esc(e.message)+'</div><button class="btn sm" onclick="navigate(\'profiles\')" style="margin-top:8px">\u2190 返回列表</button></div>';
+  }
+}
+window.loadProfile=async function(name){
+  const el=document.getElementById('pageContent');
+  el.innerHTML='<div class="loading">加载 '+esc(name)+' 包中...</div>';
+  try{
+    const r=await apiPost('/dashboard/profiles/load',{name:name});
+    if(r.status==='ok'){
+      el.innerHTML='<div class="card"><div class="card-hd"><h3>\u2705 已切换</h3></div><div class="row"><span class="l">配置包</span><span class="v">'+esc(name)+'</span></div><div style="color:var(--fg2);font-size:0.78rem;margin:8px 0">'+esc(r.message||'')+'</div><div style="margin-top:10px"><button class="btn" onclick="navigate(\'profiles\')">返回列表</button></div></div>';
+    }else{
+      el.innerHTML='<div class="error">加载失败: '+esc(r.error||'未知错误')+'</div>';
+    }
+  }catch(e){
+    el.innerHTML='<div class="error">网络错误: '+esc(e.message)+'</div>';
+  }
+};
+
+// ─── Module Detail Page ────
+async function renderModule(el,modId,statusData){
+  el.innerHTML='<div class="card"><div class="card-hd"><h3>\u25C9 '+esc(modId)+'</h3></div><div class="loading">加载中...</div></div>';
+  try{
+    const d=await api('/dashboard/engine/'+modId);
+    let html='<div class="card"><div class="card-hd"><h3>\u25C9 '+esc(modId)+'</h3></div>';
+    if(d.status==='ok'){
+      for(const [k,v] of Object.entries(d)){
+        if(k==='status')continue;
+        if(typeof v==='object'&&v!==null&&!Array.isArray(v)){
+          if(k==='data'){
+            // 数据字段直接展平
+            for(const [sk,sv] of Object.entries(v)){
+              if(typeof sv==='object'&&sv!==null&&!Array.isArray(sv)){
+                html+='<div style="margin-top:6px"><strong style="color:var(--fg2);font-size:0.72rem">'+esc(sk)+'</strong>';
+                for(const [ssk,ssv] of Object.entries(sv)){
+                  html+='<div class="row"><span class="l">'+esc(ssk)+'</span><span class="v">'+esc(String(ssv))+'</span></div>';
+                }
+                html+='</div>';
+              }else{
+                html+='<div class="row"><span class="l">'+esc(sk)+'</span><span class="v">'+esc(String(sv))+'</span></div>';
+              }
+            }
+          }else{
+            html+='<div style="margin-top:6px"><strong style="color:var(--fg2);font-size:0.72rem">'+esc(k)+'</strong>';
+            for(const [sk,sv] of Object.entries(v)){
+              html+='<div class="row"><span class="l">'+esc(sk)+'</span><span class="v">'+esc(String(sv))+'</span></div>';
+            }
+            html+='</div>';
+          }
+        }else{
+          html+='<div class="row"><span class="l">'+esc(k)+'</span><span class="v">'+esc(String(v))+'</span></div>';
+        }
+      }
+    }else{
+      // Fallback: show info from status data
+      const lc=statusData.llm||{};
+      const ec=statusData.emotion||{};
+      const mc=statusData.memory||{};
+      html+='<div style="color:var(--fg2);font-size:0.75rem;margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:var(--radius-sm)">该模块的独立数据接口尚未开放。</div>';
+      html+='<div class="grid-2">';
+      html+='<div class="card"><div class="card-hd"><h3>状态</h3></div>'+
+        '<div class="row"><span class="l">模块ID</span><span class="v">'+esc(modId)+'</span></div>'+
+        '<div class="row"><span class="l">版本</span><span class="v">'+esc(statusData.system?.version||'?')+'</span></div>'+
+        '<div class="row"><span class="l">情绪</span><span class="v">'+(ec.display||'?')+'</span></div></div>';
+      html+='<div class="card"><div class="card-hd"><h3>运行</h3></div>'+
+        '<div class="row"><span class="l">LLM</span><span class="v">'+(lc.default||'离线')+'</span></div>'+
+        '<div class="row"><span class="l">记忆</span><span class="v">'+(mc.total_entries||0)+'条</span></div>'+
+        '<div class="row"><span class="l">状态</span><span class="v">运行中</span></div></div>';
+      html+='</div>';
+    }
+    html+='</div>';
+    el.innerHTML=html;
+  }catch(e){
+    // Even if fetch fails, show nice fallback
+    const lc=statusData.llm||{};
+    const ec=statusData.emotion||{};
+    const mc=statusData.memory||{};
+    let html='<div class="card"><div class="card-hd"><h3>\u25C9 '+esc(modId)+'</h3></div>'+
+      '<div style="color:var(--fg2);font-size:0.75rem;margin-bottom:10px;padding:6px 10px;background:var(--bg2);border-radius:var(--radius-sm)">模块接口暂未连接，显示系统概览。</div>'+
+      '<div class="grid-2">'+
+      '<div class="card"><div class="card-hd"><h3>状态</h3></div>'+
+      '<div class="row"><span class="l">模块ID</span><span class="v">'+esc(modId)+'</span></div>'+
+      '<div class="row"><span class="l">版本</span><span class="v">'+esc(statusData.system?.version||'?')+'</span></div>'+
+      '<div class="row"><span class="l">情绪</span><span class="v">'+(ec.display||'?')+'</span></div></div>'+
+      '<div class="card"><div class="card-hd"><h3>运行</h3></div>'+
+      '<div class="row"><span class="l">LLM</span><span class="v">'+(lc.default||'离线')+'</span></div>'+
+      '<div class="row"><span class="l">记忆</span><span class="v">'+(mc.total_entries||0)+'条</span></div>'+
+      '<div class="row"><span class="l">状态</span><span class="v">运行中</span></div></div>'+
+      '</div></div>';
+    el.innerHTML=html;
+  }
+}
+
+// ─── Init ────
+function init(){
+  // Read hash routing
+  if(location.hash){
+    const parts=location.hash.substring(1).split(':');
+    currentPage=parts[0]||'status';
+    currentParam=parts[1]||null;
+  }
+  renderNav();
+  renderContent();
+  // Listen for hash changes
+  window.addEventListener('hashchange',()=>{
+    const parts=location.hash.substring(1).split(':');
+    currentPage=parts[0]||'status';
+    currentParam=parts[1]||null;
+    renderNav();
+    renderContent();
+  });
+}
+document.addEventListener('DOMContentLoaded',init);
+</script>
+</body>
+</html>

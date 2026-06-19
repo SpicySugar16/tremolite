@@ -157,6 +157,13 @@ fn main() {
     let data_dir = config.as_ref()
         .map(|c| PathBuf::from(&c.core.data_dir))
         .unwrap_or_else(|| PathBuf::from("./data/tremolite"));
+    // 配置包路径——所有 agent 独属数据从包目录读
+    let profile_dir = config.as_ref()
+        .map(|c| c.profile.path())
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            std::path::PathBuf::from(home).join(".tremolite").join("profiles").join("main")
+        });
 
     let mut engine = TremoliteEngine::new(data_dir.clone());
     engine.session_id = parsed.session_id.clone();
@@ -172,7 +179,13 @@ fn main() {
                 eprintln!("  Warning: Failed to initialize LLM providers: {}", e);
             }
         }
-        let soul = cfg.core.soul();
+        // 从配置包读 SOUL.md
+        let soul_path = cfg.profile.soul_path();
+        let soul = if soul_path.exists() {
+            std::fs::read_to_string(&soul_path).unwrap_or_default()
+        } else {
+            cfg.core.soul()
+        };
         if !soul.is_empty() {
             engine.set_soul(&soul);
         }
@@ -180,8 +193,9 @@ fn main() {
 
     // ── 4. 注册所有模块 ──────────────────────────
     let d = data_dir.clone();
-    let tm_path = d.join("tone_map.json").to_string_lossy().to_string();
-    let em_path = d.join("emotion.json").to_string_lossy().to_string();
+    // 模块资源路径从配置包读
+    let tm_path = profile_dir.join("tone_map.json").to_string_lossy().to_string();
+    let em_path = profile_dir.join("emotion.json").to_string_lossy().to_string();
     let _ = engine.register_module(Box::new(EmotionModule::new().with_tone_map(&tm_path, &em_path)));
 
     // 系统工具模块——将内置工具注册到模块系统
