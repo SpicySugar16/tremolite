@@ -1,18 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tremolite_core::TremoliteEngine;
-use tremolite_core::modules::{
-    emotion::EmotionModule,
-    memory::MemoryModule,
-    attention::AttentionModule,
-    plan::KanbanModule,
-    skill::SkillModule,
-    delegation::DelegationModule,
-    cron::CronModule,
-    mcp::McpModule,
-    tools::ToolsModule,
-    webhook::WebhookModule,
-    session::SessionModule,
+use tremolite_core::{
+    EmotionModule, MemoryModule, AttentionModule, KanbanModule,
+    SkillModule, DelegationModule, CronModule, McpModule,
+    ToolsModule, WebhookModule, SessionModule,
 };
 use tremolite_config::Config;
 use tremolite_server::{initialize_channels, run_server};
@@ -22,11 +15,12 @@ use tremolite_reflection::ReflectionModule;
 use tremolite_compress::CompressModule;
 use tremolite_channels::ChannelsModule;
 use std::collections::HashMap;
+use tremolite_distiller::DistillerModule;
 
 mod cli;
 mod tui;
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.3.0";
 
 /// 从 .env 文件加载环境变量
 fn load_dotenv(path: &std::path::Path) {
@@ -243,6 +237,24 @@ fn main() {
     }
     // Webhook 模块——外部事件监听与自动化流水线
     let _ = engine.register_module(Box::new(WebhookModule::new()));
+
+    // 技能蒸馏器——从实践日志中提取高频模式，通过 LLM 生成新技能
+    {
+        let providers = engine.providers.clone();
+        let llm_fn: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync> = Arc::new(move |prompt| {
+            let provider = providers
+                .get_default()
+                .ok_or_else(|| "no default provider".to_string())?;
+            let messages = vec![
+                tremolite_llm::Message::system("你是一个技能蒸馏器。"),
+                tremolite_llm::Message::user(prompt),
+            ];
+            let response = provider.chat(&messages, &[]).map_err(|e| e.to_string())?;
+            Ok(response.content)
+        });
+        let _ = engine.register_module(Box::new(DistillerModule::new(llm_fn)));
+        println!("  Distiller registered ✓");
+    }
     println!("  Modules registered ✓");
 
     // ── 6. 初始化定时任务 ────────────────────────
@@ -259,7 +271,7 @@ fn main() {
                 };
                 let _ = engine.modules.with_module_mut("cron", |m| {
                     if let Some(cm) = m.as_any_mut()
-                        .and_then(|a| a.downcast_mut::<tremolite_core::modules::cron::CronModule>())
+                        .and_then(|a| a.downcast_mut::<tremolite_core::CronModule>())
                     {
                         match &job_cfg.action {
                             tremolite_config::CronActionConfig::LlmPrompt { prompt } => {
@@ -645,25 +657,57 @@ fn handle_module(action: String, args: Vec<String>, config: Option<&Config>) {
             }
         }
         "list" | "ls" => {
-            match installer.list_installed() {
-                Ok(modules) => {
-                    if modules.is_empty() {
-                        println!("📦 No modules installed.");
-                        println!("   Install one with: tremolite module install <path-to-.amod>");
-                        return;
-                    }
-                    println!("📦 Installed modules ({})", modules.len());
-                    println!();
-                    for m in &modules {
-                        println!("  {} v{}", m.name, m.version);
-                        println!("    id:        {}", m.id);
-                        println!("    language:  {}", m.language);
-                        println!("    provides:  {}", m.provides.join(", "));
-                        println!("    path:      {}", m.path.display());
-                        println!();
-                    }
+            // 所有内建模块——透闪石出厂预装的小伙伴们
+            let builtin_modules: Vec<(&str, &str, &str, Vec<&str>)> = vec![
+                ("emotion",    "情绪引擎",       "0.3.0", vec!["emotion.detect", "emotion.style", "emotion.composite"]),
+                ("tools",      "系统工具",       "0.3.0", vec!["tool.file_read", "tool.file_write", "tool.shell"]),
+                ("memory",     "五层记忆",       "0.3.0", vec!["memory.store", "memory.recall", "memory.search"]),
+                ("session",    "会话管理器",     "0.3.0", vec!["session.manage", "session.peek", "session.share"]),
+                ("attention",  "多尺度注意力",   "0.3.0", vec!["attention.scan", "attention.summarize"]),
+                ("skill",      "技能系统",       "0.3.0", vec!["skill.learn", "skill.practice", "skill.forget"]),
+                ("board",      "看板",           "0.3.0", vec!["plan.create", "plan.track", "plan.advance"]),
+                ("delegation", "任务委派",       "0.3.0", vec!["delegate.task", "delegate.session"]),
+                ("cron",       "定时任务",       "0.3.0", vec!["cron.schedule", "cron.execute"]),
+                ("mcp",        "MCP 客户端",     "0.3.0", vec!["mcp.discover", "mcp.call"]),
+                ("webhook",    "Webhook 订阅",   "0.3.0", vec!["webhook.listen", "webhook.route"]),
+                ("dashboard",  "仪表盘",         "0.3.0", vec!["dashboard.serve"]),
+                ("reflection", "反思引擎",       "0.3.0", vec!["reflection.dialectic", "reflection.inject"]),
+                ("compress",   "上下文压缩引擎", "0.3.0", vec!["compress.strategy", "compress.execute"]),
+                ("distiller",  "技能蒸馏器",     "0.3.0", vec!["skill.distill"]),
+            ];
+
+            // 已安装的 .amod 模块
+            let installed = match installer.list_installed() {
+                Ok(modules) => modules,
+                Err(e) => {
+                    eprintln!("❌ Failed to list installed packages: {e}");
+                    vec![]
                 }
-                Err(e) => eprintln!("❌ Failed to list modules: {e}"),
+            };
+
+            let total = builtin_modules.len() + installed.len();
+            println!("📦 透闪石模块清单（共 {} 个）", total);
+            println!();
+
+            for (id, name, ver, provides) in &builtin_modules {
+                println!("  {} v{}", name, ver);
+                println!("    id:       {}", id);
+                println!("    provides: {}", provides.join(", "));
+                println!();
+            }
+
+            for m in &installed {
+                println!("  {} v{}", m.name, m.version);
+                println!("    id:        {}", m.id);
+                println!("    language:  {}", m.language);
+                println!("    provides:  {}", m.provides.join(", "));
+                println!("    path:      {}", m.path.display());
+                println!();
+            }
+
+            if installed.is_empty() {
+                println!("  （没有额外安装的 .amod 包，上面这些都是出厂预装的喔~）");
+                println!();
             }
         }
         "info" => {

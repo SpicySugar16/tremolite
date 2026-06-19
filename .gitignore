@@ -1,8 +1,21 @@
-target/
+# Runtime data — never committed
+/profiles/
+config.toml
+config.toml.bak
+SOUL.md
 .env
+
+# But allow template files in the repo
+!templates/
+!templates/profiles/
+!templates/profiles/example/
+!templates/profiles/example/*
+
+target/
 *.log
 logs/
 data/
+*.jsonl
 # Development plans — not for publishing
 REQUIREMENTS.md
 SESSION_PLAN.md

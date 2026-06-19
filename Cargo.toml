@@ -40,6 +40,7 @@ axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 futures-util = "0.3"
 rand = "0.8"
+rand_distr = "0.4"
 tokio-tungstenite = "0.24"
 url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

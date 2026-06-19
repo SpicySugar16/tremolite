@@ -1,0 +1,6 @@
+{
+  "plutchik": { "joy": 25, "trust": 25, "anticipation": 25, "sadness": 25, "anger": 25, "fear": 25, "surprise": 25, "disgust": 25 },
+  "energy": 50,
+  "composite": "trust",
+  "display": "trust"
+}

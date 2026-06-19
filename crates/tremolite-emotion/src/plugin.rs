@@ -1,17 +1,78 @@
-use tremolite_plugin::{Plugin, PluginKind, Capability, PluginContext, PluginError, PluginEvent, PluginAction};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
-/// 情绪引擎插件——把八维情绪向量包装成透闪石的原生插件💕
+use tremolite_plugin::{Capability, Plugin, PluginAction, PluginContext, PluginError, PluginEvent, PluginKind};
+
+/// 波动间隔（秒）——30 分钟
+const FLUCTUATION_INTERVAL_SECS: u64 = 1800;
+
+/// 情绪数据文件路径
+fn emotion_file_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".tremolite").join("emotion.json")
+}
+
+/// 情绪引擎插件——带独立定时器，每30分钟自动波动💕
 pub struct EmotionPlugin {
-    pub state: super::EmotionState,
+    /// 线程安全的情绪状态
+    state: Arc<Mutex<super::EmotionState>>,
     initialized: bool,
+    /// 定时器线程的停止信号
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl EmotionPlugin {
     pub fn new() -> Self {
         Self {
-            state: super::EmotionState::new(),
+            state: Arc::new(Mutex::new(super::EmotionState::new())),
             initialized: false,
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// 持久化当前状态到文件
+    fn persist(&self) {
+        let path = emotion_file_path();
+        if let Ok(state) = self.state.lock() {
+            let file = super::EmotionFile {
+                plutchik: state.as_plutchik(),
+                energy: 50.0,
+                last_update: super::now_iso(),
+                last_fluctuation: Some(super::now_iso()),
+            };
+            let _ = file.save(path.to_str().unwrap_or(""));
+        }
+    }
+
+    /// 启动后台定时波动线程
+    fn start_timer(state: Arc<Mutex<super::EmotionState>>, shutdown: Arc<AtomicBool>) {
+        thread::spawn(move || {
+            loop {
+                // 每30秒检查一次停止信号（比直接睡 30min 更优雅）
+                for _ in 0..FLUCTUATION_INTERVAL_SECS / 30 {
+                    if shutdown.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_secs(30));
+                }
+
+                // 触发自然波动
+                if let Ok(mut s) = state.lock() {
+                    s.natural_fluctuation();
+                    // 持久化
+                    let path = emotion_file_path();
+                    let file = super::EmotionFile {
+                        plutchik: s.as_plutchik(),
+                        energy: 50.0,
+                        last_update: super::now_iso(),
+                        last_fluctuation: Some(super::now_iso()),
+                    };
+                    let _ = file.save(path.to_str().unwrap_or(""));
+                }
+            }
+        });
     }
 }
 
@@ -30,42 +91,62 @@ impl Plugin for EmotionPlugin {
     }
 
     fn requires(&self) -> Vec<Capability> {
-        vec![
-            "memory:read".to_string(),
-        ]
+        vec!["memory:read".to_string()]
     }
 
     fn init(&mut self, _ctx: &PluginContext) -> Result<(), PluginError> {
+        // 加载持久化状态
+        let path = emotion_file_path();
+        if path.exists() {
+            let file = super::EmotionFile::load(path.to_str().unwrap_or(""));
+            if let Ok(mut state) = self.state.lock() {
+                *state = file.to_state();
+            }
+        }
+
+        // 启动后台定时波动线程
+        Self::start_timer(self.state.clone(), self.shutdown_flag.clone());
+
         self.initialized = true;
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
+        // 停止定时器
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        // 持久化最终状态
+        self.persist();
         self.initialized = false;
         Ok(())
     }
 
-    fn on_event(&mut self, event: &PluginEvent, _ctx: &PluginContext) -> Result<Option<PluginAction>, PluginError> {
+    fn on_event(
+        &mut self,
+        event: &PluginEvent,
+        _ctx: &PluginContext,
+    ) -> Result<Option<PluginAction>, PluginError> {
         match event {
             PluginEvent::PreLlm { messages } => {
-                // LLM调用前，从对话中检测情绪
+                let mut state = self.state.lock().map_err(|e| PluginError(e.to_string()))?;
+
+                // 1. 从对话中检测情绪
                 for msg in messages {
-                    self.state.detect_from_text(msg);
+                    state.detect_from_text(msg);
                 }
-                // 注入情绪风格提示
-                let composite = self.state.composite_emotion();
+
+                // 2. 线性衰减（每次对话衰减 1 分钟）
+                state.decay(1);
+
+                // 3. 注入情绪风格提示
+                let composite = state.composite_emotion();
                 let style = super::style_from_emotion(&composite);
-                let injection = format!(
-                    "[当前情绪: {} | 风格: {}]",
-                    composite, style
-                );
+                let injection = format!("[当前情绪: {} | 风格: {}]", composite, style);
                 Ok(Some(PluginAction::Rewrite { text: injection }))
             }
             PluginEvent::PostLlm { response } => {
-                // LLM调用后，根据回复更新情绪
-                self.state.detect_from_text(response);
-                // 时间衰减
-                self.state.decay(1);
+                if let Ok(mut state) = self.state.lock() {
+                    state.detect_from_text(response);
+                }
                 Ok(None)
             }
             _ => Ok(None),

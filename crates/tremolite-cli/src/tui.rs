@@ -425,7 +425,7 @@ fn process_tui_message(engine: &mut TremoliteEngine, input: &str) -> String {
     let available_tools: Vec<String> = all_tools.into_iter().filter(|name| {
         name == "use_tool" || engine.modules.with_module("skill", |m| {
             m.as_any()
-                .and_then(|any| any.downcast_ref::<tremolite_core::modules::skill::SkillModule>())
+                .and_then(|any| any.downcast_ref::<tremolite_core::SkillModule>())
                 .map(|sm| sm.engine().get_success_rate(name))
                 .unwrap_or(0.5)
         }).unwrap_or(0.5) >= 0.3
@@ -434,7 +434,7 @@ fn process_tui_message(engine: &mut TremoliteEngine, input: &str) -> String {
     // 获取最近对话历史
     let history: Vec<Message> = engine.modules.with_module("memory", |m| {
         m.as_any()
-            .and_then(|any| any.downcast_ref::<tremolite_core::modules::memory::MemoryModule>())
+            .and_then(|any| any.downcast_ref::<tremolite_core::MemoryModule>())
             .map(|mm| {
                 mm.recent_entries(&engine.session_id, 20).iter().filter_map(|entry| {
                     let c = &entry.content;
@@ -463,7 +463,7 @@ fn process_tui_message(engine: &mut TremoliteEngine, input: &str) -> String {
                 for record in &result.call_history {
                     let _ = engine.modules.with_module_mut("skill", |m| {
                         if let Some(sm) = m.as_any_mut()
-                            .and_then(|any| any.downcast_mut::<tremolite_core::modules::skill::SkillModule>())
+                            .and_then(|any| any.downcast_mut::<tremolite_core::SkillModule>())
                         {
                             sm.engine_mut().practice("use_tool", record.success, &record.tool_name);
                         }
@@ -477,7 +477,7 @@ fn process_tui_message(engine: &mut TremoliteEngine, input: &str) -> String {
         // 无 LLM provider 时的 fallback
         let emotion = engine.modules.with_module("emotion", |m| {
             m.as_any()
-                .and_then(|any| any.downcast_ref::<tremolite_core::modules::emotion::EmotionModule>())
+                .and_then(|any| any.downcast_ref::<tremolite_core::EmotionModule>())
                 .map(|em| em.composite_emotion())
                 .unwrap_or_default()
         }).unwrap_or_default();

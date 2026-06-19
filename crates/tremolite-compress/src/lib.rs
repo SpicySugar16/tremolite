@@ -315,7 +315,7 @@ impl CompressModule {
             .with_module("memory", |m| {
                 let mm = match m
                     .as_any()
-                    .and_then(|a| a.downcast_ref::<tremolite_core::modules::memory::MemoryModule>())
+                    .and_then(|a| a.downcast_ref::<tremolite_core::MemoryModule>())
                 {
                     Some(mm) => mm,
                     None => {

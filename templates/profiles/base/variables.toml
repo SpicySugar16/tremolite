@@ -1,0 +1,9 @@
+# 基础配置包 · 无密钥
+# 使用 ${ENV_VAR} 从环境变量读取
+[api]
+deepseek_key = "${DEEPSEEK_API_KEY:-}"
+siliconflow_key = "${SILICONFLOW_API_KEY:-}"
+
+[preferences]
+max_response_tokens = 2048
+temperature = 0.5

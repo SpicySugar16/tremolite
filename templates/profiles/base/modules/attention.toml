@@ -1,0 +1,4 @@
+# 注意力模块（默认配置）
+[attention]
+scan_interval_rounds = 10
+summarize_threshold = 0.5

@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::env;
 
+/// 用户级运行时目录（用于隔离敏感配置）
+const RUNTIME_DIR: &str = "~/.tremolite";
+
 use tremolite_llm::{
     ProviderRegistry, LLMProvider,
     OpenAIProvider, DeepSeekProvider, OllamaProvider,
@@ -365,16 +368,18 @@ fn default_ollama_url() -> String {
 
 impl Config {
     /// 从文件加载配置
-    /// 先找 `path`，如果找不到则找默认路径 `./config.toml`
+    /// 查找顺序：
+    ///   1. 指定的 path（如有）
+    ///   2. `./config.toml`（仓库本地配置——建议只放示例/模板）
+    ///   3. `~/.tremolite/config.toml`（用户级运行时配置——存放敏感信息）
     pub fn load(path: Option<&str>) -> Result<Self, ConfigError> {
-        // 先尝试加载 .env 文件
+        // 加载环境变量：先本地 .env，再用户级 .env（后者覆盖前者）
         load_env_file("./.env");
+        let runtime_env = expand_tilde("~/.tremolite/.env");
+        load_env_file(&runtime_env);
 
-        let config_path = path.map_or_else(
-            || PathBuf::from("./config.toml"),
-            PathBuf::from,
-        );
-
+        // 决定用哪个配置路径
+        let config_path = resolve_config_path(path);
         let content = std::fs::read_to_string(&config_path)?;
         let mut config: Config = toml::from_str(&content)?;
 
@@ -506,6 +511,32 @@ impl ProviderConfig {
             }
         })
     }
+}
+
+/// 将 `~` 替换为 `$HOME`
+fn expand_tilde(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Ok(home) = env::var("HOME") {
+            return format!("{}/{}", home.trim_end_matches('/'), rest);
+        }
+    }
+    s.to_string()
+}
+
+/// 决定配置文件的查找路径：
+///   1. 指定的 path（如有）
+///   2. `./config.toml`
+///   3. `~/.tremolite/config.toml`
+fn resolve_config_path(path: Option<&str>) -> PathBuf {
+    if let Some(p) = path {
+        return PathBuf::from(p);
+    }
+    // 优先本地配置（仓库中建议只放 config.example.toml，config.toml 已 .gitignore）
+    if Path::new("./config.toml").exists() {
+        return PathBuf::from("./config.toml");
+    }
+    // 回退到用户级运行时配置
+    expand_tilde("~/.tremolite/config.toml").into()
 }
 
 /// 尝试从 .env 文件加载环境变量

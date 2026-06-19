@@ -1,0 +1,5 @@
+# 记忆模块（默认配置）
+[memory]
+top_k = 3
+threshold = 0.5
+l2_capacity = 100

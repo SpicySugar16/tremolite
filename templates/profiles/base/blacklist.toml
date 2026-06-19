@@ -1,0 +1,6 @@
+# 无黑名单配置
+[topics]
+blocked = []
+
+[sensitive]
+blocked_words = []

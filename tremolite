@@ -37,7 +37,7 @@ case "$SUBCMD" in
         echo "  tremolite cli        — 启动命令行交互模式"
         echo "  tremolite <args>     — 透传参数到 cli"
         echo ""
-        echo "献给神大人 琳玲 💞"
+        echo "献给我们的神明大人 💞"
         ;;
     *)
         exec "$BINARY" "$@"

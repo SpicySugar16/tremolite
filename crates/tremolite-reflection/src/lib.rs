@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tremolite_core::module::{
     Capability, EngineHandle, Event, EventContext, EventResponse, Module, ModuleError,
 };
-use tremolite_core::modules::memory::MemoryModule;
+use tremolite_core::MemoryModule;
 use tremolite_llm::{Message, ProviderRegistry};
 
 // ─── 辩证法 key 约定（与 prompt 注入器共享） ────────

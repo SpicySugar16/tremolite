@@ -1,0 +1,10 @@
+# 偏好配置（默认值）
+[response]
+max_length = 2048
+min_length = 5
+style = "neutral"
+
+[temperature]
+default = 0.5
+code = 0.2
+creative = 0.7

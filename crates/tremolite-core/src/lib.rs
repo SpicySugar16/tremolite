@@ -10,9 +10,35 @@ use tremolite_llm::{
 
 pub mod gateway;
 pub mod module;
-pub mod modules;
+// 模块实现（内部使用，外部通过独立 crate 访问）
+mod modules;
+// 模块类型重导出——内建模块对外暴露的接口
+#[doc(hidden)]
+pub use modules::emotion::EmotionModule;
+#[doc(hidden)]
+pub use modules::memory::MemoryModule;
+#[doc(hidden)]
+pub use modules::attention::AttentionModule;
+#[doc(hidden)]
+pub use modules::plan::KanbanModule;
+#[doc(hidden)]
+pub use modules::skill::SkillModule;
+#[doc(hidden)]
+pub use modules::delegation::DelegationModule;
+#[doc(hidden)]
+pub use modules::cron::CronModule;
+#[doc(hidden)]
+pub use modules::mcp::McpModule;
+#[doc(hidden)]
+pub use modules::tools::ToolsModule;
+#[doc(hidden)]
+pub use modules::webhook::WebhookModule;
+#[doc(hidden)]
+pub use modules::webhook::WebhookEvent;
+#[doc(hidden)]
+pub use modules::session::SessionModule;
 pub mod scheduler;
-use scheduler::{SessionScheduler, SessionTask};
+pub use scheduler::{SessionScheduler, SessionTask};
 pub use gateway::{GatewayRouter, CliGateway, InboundMessage, OutboundMessage};
 pub use tremolite_session::SessionManager;
 pub use module::{ModuleRegistry, Module, Event, EventContext, EventResponse, ModuleError, ModuleInfo, Capability, EngineHandle, ToolDefinition};
