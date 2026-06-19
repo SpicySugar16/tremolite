@@ -1,0 +1,6 @@
+# 不聊的话题、不能接的命令
+[topics]
+blocked = []
+
+[sensitive]
+blocked_words = []

@@ -1,0 +1,10 @@
+# 偏好配置
+[response]
+max_length = 4096
+min_length = 10
+style = "natural"
+
+[temperature]
+default = 0.7
+code = 0.3
+creative = 0.9

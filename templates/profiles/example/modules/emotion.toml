@@ -1,0 +1,6 @@
+# 情绪模块配置
+[emotion]
+amplitude = 1.0
+decay_rate = 0.05
+baseline_energy = 50
+tone_map = "tone_map.json"

@@ -1,0 +1,10 @@
+[package]
+name = "tremolite-user"
+version = "0.1.0"
+edition = "2021"
+description = "用户模块——多用户识别、画像、权限管理"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

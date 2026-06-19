@@ -1,0 +1,16 @@
+# 记忆模块配置
+[memory]
+top_k = 3
+threshold = 0.55
+l2_capacity = 200
+l3_capacity = 1000
+MEOF
+cat > modules/attention.toml << 'AEOF'
+# 注意力模块配置
+[attention]
+scan_interval_rounds = 5
+summarize_threshold = 0.6
+MEOF
+touch memory/.gitkeep prompts/.gitkeep skills/.gitkeep
+echo "=== 模板目录结构 ==="
+find . -type f | sort
