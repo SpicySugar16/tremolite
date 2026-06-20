@@ -68,6 +68,12 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .toggle .sl:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background:var(--fg2);border-radius:50%;transition:0.2s}
 .toggle input:checked+.sl{background:var(--accent-dim);border-color:var(--accent-border)}
 .toggle input:checked+.sl:before{background:var(--accent);transform:translateX(14px)}
+.nav-item[draggable]{cursor:grab}
+.nav-item[draggable]:active{cursor:grabbing;-webkit-user-select:none;user-select:none}
+.nav-item.dragging{opacity:0.3}
+.nav-item.drag-over{border-top:2px solid var(--accent)}
+.drag-handle{color:var(--fg3);font-size:0.68rem;cursor:grab;opacity:0.35;transition:opacity 0.15s;width:14px;text-align:center;flex-shrink:0;user-select:none}
+.nav-item:hover .drag-handle{opacity:0.8}
 </style>
 </head>
 <body>
@@ -121,10 +127,21 @@ function renderNav(){
   // Dynamic modules
   api('/dashboard/status').then(d=>{
     const mods=d.modules||{};
-    const registered=mods.registered||[];
+    let registered=mods.registered||[];
+    // Apply localStorage order override
+    const saved=getModuleOrder();
+    if(saved&&saved.length){
+      const map={};for(const m of registered)map[m.name]=m;
+      const ordered=[];const seen=new Set();
+      for(const name of saved){if(map[name]){ordered.push(map[name]);seen.add(name)}}
+      for(const m of registered)if(!seen.has(m.name))ordered.push(m);
+      registered=ordered;
+    }
     for(const m of registered){
       const isAct=currentPage==='module'&&currentParam===m.name;
-      html+=('<div class="nav-item'+(isAct?' active':'')+'" onclick="navigate(\'module\',\''+esc(m.name)+'\')"><span class="ico">\u25C9</span>'+esc(m.label||m.name)+'</div>');
+      html+='<div class="nav-item'+(isAct?' active':'')+'" draggable="true" data-name="'+esc(m.name)+'" '+
+        'ondragstart="dragStart(event)" ondragover="dragOver(event)" ondrop="dragDrop(event)" ondragend="dragEnd(event)" '+
+        'onclick="navigate(\'module\',\''+esc(m.name)+'\')"><span class="drag-handle">☰</span><span class="ico">\u25C9</span>'+esc(m.label||m.name)+'</div>';
     }
     el.innerHTML=html;
   }).catch(()=>{el.innerHTML=html+'<div class="loading">无模块</div>'});
@@ -504,6 +521,50 @@ window.restartTremolite=async function(){
     setTimeout(()=>{btn.textContent='重启生效';btn.disabled=false},3000);
   }
 };
+// ─── Drag-and-drop module ordering ────
+let dragSrcName=null;
+function dragStart(e){
+  dragSrcName=e.target.closest('.nav-item').dataset.name;
+  e.dataTransfer.effectAllowed='move';
+  setTimeout(()=>e.target.closest('.nav-item').classList.add('dragging'),0);
+}
+function dragOver(e){
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  const t=e.target.closest('.nav-item');
+  if(t&&t.dataset.name!==dragSrcName){
+    document.querySelectorAll('.nav-item.drag-over').forEach(el=>el.classList.remove('drag-over'));
+    t.classList.add('drag-over');
+  }
+}
+function dragDrop(e){
+  e.preventDefault();
+  const t=e.target.closest('.nav-item');
+  if(!t||!dragSrcName||t.dataset.name===dragSrcName)return;
+  const sb=document.getElementById('sidebar');
+  const src=sb.querySelector('[data-name="'+dragSrcName+'"]');
+  if(!src||!t)return;
+  const all=Array.from(sb.querySelectorAll('.nav-item[draggable]'));
+  const si=all.indexOf(src),ti=all.indexOf(t);
+  if(si<0||ti<0)return;
+  if(si<ti)t.parentNode.insertBefore(src,t.nextSibling);
+  else t.parentNode.insertBefore(src,t);
+  saveModuleOrder();
+  dragSrcName=null;
+}
+function dragEnd(e){
+  const item=e.target.closest('.nav-item');
+  if(item)item.classList.remove('dragging');
+  document.querySelectorAll('.nav-item.drag-over').forEach(el=>el.classList.remove('drag-over'));
+}
+function getModuleOrder(){
+  try{return JSON.parse(localStorage.getItem('tremolite_mod_order'))}catch(e){return null}
+}
+function saveModuleOrder(){
+  const sb=document.getElementById('sidebar');
+  const names=Array.from(sb.querySelectorAll('.nav-item[draggable]')).map(el=>el.dataset.name);
+  try{localStorage.setItem('tremolite_mod_order',JSON.stringify(names))}catch(e){}
+}
 // ─── Init ────
 function init(){
   // Read hash routing

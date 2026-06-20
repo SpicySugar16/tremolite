@@ -491,6 +491,14 @@ async fn handle_dashboard_status(
         let n = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
         seen.insert(n.to_string())
     });
+    // 固定排序：core 在最前，其余按 name 字母序
+    module_entries.sort_by(|a, b| {
+        let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if na == "core" { std::cmp::Ordering::Less }
+        else if nb == "core" { std::cmp::Ordering::Greater }
+        else { na.cmp(nb) }
+    });
 
     // 读 profiles 列表
     let home = std::env::var("HOME").unwrap_or_default();
