@@ -68,6 +68,17 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .toggle .sl:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background:var(--fg2);border-radius:50%;transition:0.2s}
 .toggle input:checked+.sl{background:var(--accent-dim);border-color:var(--accent-border)}
 .toggle input:checked+.sl:before{background:var(--accent);transform:translateX(14px)}
+.dim-row{display:flex;align-items:center;gap:6px;padding:4px 0}
+.dim-label{width:42px;font-size:0.78rem;color:var(--fg2);flex-shrink:0;text-align:right}
+.dim-slider{-webkit-appearance:none;appearance:none;flex:1;height:4px;background:var(--bg3);border-radius:2px;outline:none;cursor:pointer;accent-color:var(--accent)}
+.dim-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--bg);cursor:pointer}
+.dim-input{width:48px;font-family:var(--mono);font-size:0.75rem;padding:2px 4px;text-align:center;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--fg);-moz-appearance:textfield}
+.dim-input::-webkit-inner-spin-button,.dim-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.hist-table{width:100%;border-collapse:collapse;font-size:0.74rem}
+.hist-table th,.hist-table td{padding:3px 5px;text-align:center;border-bottom:1px solid var(--bg3)}
+.hist-table th{color:var(--fg2);font-weight:500;font-size:0.7rem}
+.hist-table td{color:var(--fg)}
+.hist-table tr:hover{background:var(--bg2)}
 .nav-item[draggable]{cursor:pointer;-webkit-user-select:none;user-select:none}
 .nav-item[draggable]:active{cursor:pointer}
 .nav-item.dragging{opacity:0.3}
@@ -103,6 +114,7 @@ function fmtUptime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s
 // ─── Navigation ────
 const NAV_BASE=[
   {id:'status',ico:'\u25C9',label:'状态'},
+  {id:'emotion',ico:'\u2764',label:'情绪'},
   {id:'config',ico:'\u2699',label:'配置'},
   {id:'sessions',ico:'\u2630',label:'会话'},
   {id:'logs',ico:'\u2261',label:'日志'},
@@ -159,6 +171,7 @@ async function renderContent(){
   
   switch(currentPage){
     case 'status': await renderStatus(el,statusData);break;
+    case 'emotion': await renderEmotion(el);break;
     case 'chat': await renderChat(el,statusData);break;
     case 'config': await renderConfig(el,statusData);break;
     case 'sessions': await renderSessions(el,statusData);break;
@@ -214,6 +227,95 @@ async function renderStatus(el,d){
     el.innerHTML='<div class="error">加载失败: '+esc(e.message)+'</div>';
   }
 }
+
+// ─── Emotion Page ────
+const EMOTION_DIMS={joy:'喜悦',trust:'信任',fear:'恐惧',surprise:'惊讶',sadness:'悲伤',disgust:'厌恶',anger:'愤怒',anticipation:'期待'};
+const EMOTION_KEYS=['joy','trust','fear','surprise','sadness','disgust','anger','anticipation'];
+
+async function renderEmotion(el){
+  let d;
+  try{ d=await api('/dashboard/emotion'); }catch(e){
+    el.innerHTML='<div class="card"><div class="loading">情绪数据加载失败</div></div>'; return;
+  }
+  if(d.status!=='ok'||!d.data){
+    el.innerHTML='<div class="card"><div class="loading">情绪数据不可用</div></div>'; return;
+  }
+  const cur=d.data.current||{},style=d.data.style||{},plutchik=cur.plutchik||{},history=d.data.history||[],version=d.data.version||'?';
+  let html='';
+  // 顶部双栏
+  html+='<div class="grid-2">';
+  html+='<div class="card"><div class="card-hd"><h3>❤ 情绪状态</h3></div>'+
+    '<div class="row"><span class="l">主导情绪</span><span class="v"><span class="badge-accent">'+esc(style.style_label||'?')+'</span></span></div>'+
+    '<div class="row"><span class="l">复合情绪</span><span class="v">'+esc(style.composite||'?')+'</span></div>'+
+    '<div class="row"><span class="l">情绪维度</span><span class="v">'+esc(style.dominant||'?')+'</span></div></div>';
+  html+='<div class="card"><div class="card-hd"><h3>✎ 风格注入</h3></div>'+
+    '<div class="row"><span class="l">风格标签</span><span class="v">'+esc(style.style_label||'?')+'</span></div>'+
+    '<div class="row"><span class="l">例句</span><span class="v" style="color:var(--accent);font-style:italic">"'+esc(style.example||'')+'"</span></div>'+
+    '<div class="row"><span class="l">注入短语</span><span class="v">'+esc(style.composite||style.style_label||'?')+'</span></div></div>';
+  html+='</div>';
+  // 八维情绪滑块（2列）
+  html+='<div class="card"><div class="card-hd"><h3>📊 Plutchik 八维情绪</h3></div><div class="grid-2">';
+  const col1=['joy','trust','fear','surprise'],col2=['sadness','disgust','anger','anticipation'];
+  for(const cols of [col1,col2]){
+    html+='<div>';
+    for(const key of cols){
+      const label=EMOTION_DIMS[key]||key;
+      const val=Math.round(plutchik[key]||50);
+      html+='<div class="dim-row"><div class="dim-label">'+label+'</div>'+
+        '<input type="range" class="dim-slider" min="0" max="100" value="'+val+'" oninput="updateSlider(this,\''+key+'\')">'+
+        '<input type="number" class="dim-input" min="0" max="100" value="'+val+'" onchange="updateNumber(this,\''+key+'\')"></div>';
+    }
+    html+='</div>';
+  }
+  html+='</div></div>';
+  // 历史记录
+  html+='<div class="card"><div class="card-hd"><h3>📜 情绪波动历史（最近10条）</h3></div>';
+  if(!history.length) html+='<div class="loading">暂无记录</div>';
+  else{
+    const recent=history.slice(-10).reverse();
+    html+='<table class="hist-table"><thead><tr><th>时间</th><th>类型</th><th>喜悦</th><th>信任</th><th>恐惧</th><th>惊讶</th><th>悲伤</th><th>厌恶</th><th>愤怒</th><th>期待</th><th>风格</th></tr></thead><tbody>';
+    for(const h of recent){
+      const t=new Date((h.timestamp||0)*1000);
+      const ts=t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      const tp=h.type==='fluctuation'?'波动':'手动';
+      const p=h.plutchik||{};
+      html+='<tr><td>'+ts+'</td><td>'+tp+'</td>'+EMOTION_KEYS.map(k=>'<td>'+Math.round(p[k]||0)+'</td>').join('')+'<td>'+esc(h.style||'')+'</td></tr>';
+    }
+    html+='</tbody></table>';
+  }
+  html+='</div>';
+  // 底部按钮+版本号
+  html+='<div style="display:flex;align-items:center;gap:12px;margin-top:4px">'+
+    '<button class="btn" onclick="refreshEmotion()">↻ 刷新</button>'+
+    '<button class="btn accent" onclick="fluctuateEmotion()">🌊 立即情绪波动</button>'+
+    '<span style="margin-left:auto;color:var(--fg3);font-size:0.72rem">情绪引擎 v'+esc(version)+'</span></div>';
+  el.innerHTML=html;
+}
+
+// ─── Emotion slider handlers ────
+let emotionDebounce=null;
+window.updateSlider=function(el,key){
+  const val=parseInt(el.value);
+  el.nextElementSibling.value=val;
+  clearTimeout(emotionDebounce);
+  emotionDebounce=setTimeout(()=>apiPost('/dashboard/emotion/update',{dimension:key,value:val}),300);
+};
+window.updateNumber=function(el,key){
+  const val=Math.min(100,Math.max(0,parseInt(el.value)||0));
+  el.value=val;el.previousElementSibling.value=val;
+  apiPost('/dashboard/emotion/update',{dimension:key,value:val});
+};
+window.refreshEmotion=function(){
+  const el=document.getElementById('pageContent');
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  renderEmotion(el);
+};
+window.fluctuateEmotion=async function(){
+  const el=document.getElementById('pageContent');
+  el.innerHTML='<div class="loading">波动中...</div>';
+  try{ await apiPost('/dashboard/emotion/fluctuate'); await renderEmotion(el); }
+  catch(e){ el.innerHTML='<div class="error">波动失败: '+esc(e.message)+'</div>'; }
+};
 
 // ─── Chat Page ────
 let chatCount=0;

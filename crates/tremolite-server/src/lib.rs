@@ -110,6 +110,9 @@ async fn run_server_inner(
         .route("/dashboard/engine/{mod_id}", get(handle_engine_mod))
         .route("/dashboard/engine/core/modules/{mod_id}/toggle", post(handle_module_toggle))
         .route("/dashboard/engine/core/restart", post(handle_restart))
+        .route("/dashboard/emotion", get(handle_emotion_status))
+        .route("/dashboard/emotion/update", post(handle_emotion_update))
+        .route("/dashboard/emotion/fluctuate", post(handle_emotion_fluctuate))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -919,6 +922,210 @@ async fn handle_restart() -> Json<serde_json::Value> {
         "status": "ok",
         "message": "正在重启透闪石……watchdog 会在几秒内重新拉起。",
     }))
+}
+
+// ─── Helper: 从 Plutchik 值推导风格 ──────────────
+fn compute_emotion_style(plutchik: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    // 找主导情绪
+    let dominant = plutchik.iter()
+        .max_by(|a, b| a.1.as_f64().unwrap_or(0.0).partial_cmp(&b.1.as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(k, _)| k.as_str())
+        .unwrap_or("trust");
+    // 找第二高（用来算复合）
+    let mut sorted: Vec<(&str, f64)> = plutchik.iter()
+        .filter_map(|(k, v)| Some((k.as_str(), v.as_f64()?)))
+        .collect();
+    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let second = sorted.get(1).map(|(k, _)| *k).unwrap_or("");
+
+    // 风格标签
+    let style_label = match dominant {
+        "joy" => "积极乐观",
+        "trust" => "安稳信任",
+        "fear" => "不安警惕",
+        "surprise" => "意外困惑",
+        "sadness" => "低落忧郁",
+        "disgust" => "排斥不满",
+        "anger" => "冲动易怒",
+        "anticipation" => "期待向前",
+        _ => "平静稳定",
+    };
+
+    // 复合情绪
+    let composite = match (dominant, second) {
+        ("joy", "trust") | ("trust", "joy") => "恋爱",
+        ("joy", "anticipation") | ("anticipation", "joy") => "乐观",
+        ("trust", "fear") | ("fear", "trust") => "服从",
+        ("fear", "surprise") | ("surprise", "fear") => "敬畏",
+        ("surprise", "sadness") | ("sadness", "surprise") => "不赞同",
+        ("sadness", "disgust") | ("disgust", "sadness") => "懊悔",
+        ("disgust", "anger") | ("anger", "disgust") => "轻蔑",
+        ("anger", "anticipation") | ("anticipation", "anger") => "攻击性",
+        _ => style_label,
+    };
+
+    // 例句
+    let example = match dominant {
+        "joy" => "这个走向，不算坏呢。",
+        "trust" => "嗯，交给葵就好了。",
+        "fear" => "噜噜……有点不安。",
+        "surprise" => "诶，这样的吗。",
+        "sadness" => "……有点低落。",
+        "disgust" => "唔……这个走向不太好。",
+        "anger" => "不行，这个葵不接受。",
+        "anticipation" => "还有往前的空间喔。",
+        _ => "嗯，就这样吧。",
+    };
+
+    serde_json::json!({
+        "dominant": dominant,
+        "style_label": style_label,
+        "composite": composite,
+        "example": example,
+    })
+}
+
+// ─── Handler: 情绪状态 + 历史 ──────────────────────
+async fn handle_emotion_status() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
+
+    // 读当前情绪
+    let emotion_data = std::fs::read_to_string(data_dir.join("emotion.json")).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or_default();
+    let plutchik = emotion_data.get("plutchik").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let energy = emotion_data.get("energy").and_then(|v| v.as_f64()).unwrap_or(50.0);
+
+    // 读历史
+    let history: Vec<serde_json::Value> = std::fs::read_to_string(data_dir.join("emotion_history.json")).ok()
+        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+        .unwrap_or_default();
+
+    // 风格
+    let style = compute_emotion_style(&plutchik);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "data": {
+            "current": {
+                "plutchik": plutchik,
+                "energy": energy,
+            },
+            "style": style,
+            "history": history,
+            "version": "0.3.1",
+        }
+    }))
+}
+
+// ─── Handler: 更新情绪维度 ──────────────────────
+async fn handle_emotion_update(
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
+    let path = data_dir.join("emotion.json");
+
+    let dimension = payload.get("dimension").and_then(|v| v.as_str()).unwrap_or("");
+    let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(50.0);
+    if dimension.is_empty() {
+        return Json(serde_json::json!({"status": "error", "error": "缺少 dimension"}));
+    }
+    let valid_dims = ["joy","sadness","anger","fear","surprise","disgust","anticipation","trust","energy"];
+    if !valid_dims.contains(&dimension) {
+        return Json(serde_json::json!({"status": "error", "error": format!("无效维度: {dimension}")}));
+    }
+
+    let mut data: serde_json::Value = std::fs::read_to_string(&path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    if dimension == "energy" {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("energy".into(), serde_json::json!(value.max(0.0).min(100.0)));
+        }
+    } else {
+        if let Some(plutchik) = data.get_mut("plutchik").and_then(|v| v.as_object_mut()) {
+            plutchik.insert(dimension.into(), serde_json::json!(value.max(0.0).min(100.0)));
+        }
+    }
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("last_update".into(), serde_json::json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string()));
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&data).unwrap_or_default());
+
+    // 记录历史
+    let new_plutchik = data.get("plutchik").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let style = compute_emotion_style(&new_plutchik);
+    let entry = serde_json::json!({
+        "timestamp": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        "type": "manual",
+        "dimension": dimension,
+        "value": value,
+        "plutchik": new_plutchik,
+        "style": style.get("style_label").and_then(|v| v.as_str()).unwrap_or(""),
+    });
+    let hist_path = data_dir.join("emotion_history.json");
+    let mut history: Vec<serde_json::Value> = std::fs::read_to_string(&hist_path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    history.push(entry);
+    if history.len() > 100 { history.drain(0..history.len()-100); }
+    let _ = std::fs::write(&hist_path, serde_json::to_string_pretty(&history).unwrap_or_default());
+
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+// ─── Handler: 立即情绪波动 ──────────────────────
+async fn handle_emotion_fluctuate() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
+    let path = data_dir.join("emotion.json");
+
+    let mut data: serde_json::Value = std::fs::read_to_string(&path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // 给八维随机增减 5-20
+    let dims = ["joy","sadness","anger","fear","surprise","disgust","anticipation","trust"];
+    if let Some(plutchik) = data.get_mut("plutchik").and_then(|v| v.as_object_mut()) {
+        for d in &dims {
+            let old = plutchik.get(*d).and_then(|v| v.as_f64()).unwrap_or(50.0);
+            let delta = (rand::random::<f64>() * 30.0 - 15.0); // -15 ~ +15
+            let new = (old + delta).clamp(0.0, 100.0);
+            plutchik.insert(d.to_string(), serde_json::json!(new));
+        }
+    }
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("last_fluctuation".into(), serde_json::json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string()));
+        obj.insert("last_update".into(), serde_json::json!(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs().to_string()));
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&data).unwrap_or_default());
+
+    // 记录历史
+    let new_plutchik = data.get("plutchik").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    let style = compute_emotion_style(&new_plutchik);
+    let entry = serde_json::json!({
+        "timestamp": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        "type": "fluctuation",
+        "plutchik": new_plutchik,
+        "style": style.get("style_label").and_then(|v| v.as_str()).unwrap_or(""),
+    });
+    let hist_path = data_dir.join("emotion_history.json");
+    let mut history: Vec<serde_json::Value> = std::fs::read_to_string(&hist_path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    history.push(entry);
+    if history.len() > 100 { history.drain(0..history.len()-100); }
+    let _ = std::fs::write(&hist_path, serde_json::to_string_pretty(&history).unwrap_or_default());
+
+    Json(serde_json::json!({"status": "ok"}))
 }
 
 // ─── Handler: 配置包详情数据 ────────────────────

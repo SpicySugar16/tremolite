@@ -5,12 +5,13 @@ edition = "2021"
 description = "HTTP API server + HttpChannel + NapCatChannel"
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
-tracing.workspace = true
-tokio.workspace = true
 axum.workspace = true
-tower-http.workspace = true
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tower-http = { workspace = true, features = ["cors"] }
+tracing.workspace = true
 futures-util.workspace = true
 async-trait = "0.1"
 tremolite-core = { path = "../tremolite-core" }
