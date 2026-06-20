@@ -276,7 +276,7 @@ async function renderEmotion(el){
     for(const h of recent){
       const t=new Date((h.timestamp||0)*1000);
       const ts=t.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-      const tp=h.type==='fluctuation'?'波动':'手动';
+      const tp=h.type==='fluctuation'?'自动波动':h.type==='manual_fluctuation'?'手动波动':'手动';
       const p=h.plutchik||{};
       html+='<tr><td>'+ts+'</td><td>'+tp+'</td>'+EMOTION_KEYS.map(k=>'<td>'+Math.round(p[k]||0)+'</td>').join('')+'<td>'+esc(h.style||'')+'</td></tr>';
     }

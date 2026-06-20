@@ -1108,7 +1108,7 @@ async fn handle_emotion_fluctuate() -> Json<serde_json::Value> {
     let entry = serde_json::json!({
         "timestamp": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-        "type": "fluctuation",
+        "type": "manual_fluctuation",
         "plutchik": new_plutchik,
         "style": style.get("style_label").and_then(|v| v.as_str()).unwrap_or(""),
     });
