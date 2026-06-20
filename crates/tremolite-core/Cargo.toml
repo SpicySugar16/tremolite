@@ -25,3 +25,4 @@ tremolite-delegation = { path = "../tremolite-delegation" }
 tremolite-mcp = { path = "../tremolite-mcp" }
 tremolite-cron = { path = "../tremolite-cron" }
 rand = { workspace = true }
+chrono.workspace = true

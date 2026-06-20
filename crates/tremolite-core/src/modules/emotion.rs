@@ -125,22 +125,37 @@ impl Module for EmotionModule {
             Event::OnMessage { input, .. } => {
                 let session_id = ctx.session_id.clone();
                 let state = self.state_for_mut(&session_id);
+
+                // 0. 时间检查波动（仿 Hermes pre_llm_call）
+                if !file_path.is_empty() {
+                    if let Ok(raw) = std::fs::read_to_string(&file_path) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            let last_fluc = val.get("last_fluctuation")
+                                .or_else(|| val.get("last_update"))
+                                .and_then(|x| x.as_str());
+                            if let Some(lf) = last_fluc {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                let elapsed = if let Ok(ts) = lf.parse::<u64>() {
+                                    now.saturating_sub(ts)
+                                } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(lf) {
+                                    now.saturating_sub(dt.timestamp() as u64)
+                                } else {
+                                    0
+                                };
+                                if elapsed >= 1800 {
+                                    state.natural_fluctuation();
+                                    let _ = tremolite_emotion::save_emotion(state, Some("fluctuation"), &file_path);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 state.detect_from_text(input);
 
                 if !file_path.is_empty() {
-                    let file = tremolite_emotion::EmotionFile {
-                        plutchik: state.as_plutchik(),
-                        energy: 50.0,
-                        last_update: tremolite_emotion::now_iso(),
-                        last_fluctuation: None,
-                    };
-                    // 保留上一次的 last_fluctuation
-                    let existing = tremolite_emotion::EmotionFile::load(&file_path);
-                    let file = tremolite_emotion::EmotionFile {
-                        last_fluctuation: existing.last_fluctuation,
-                        ..file
-                    };
-                    let _ = file.save(&file_path);
+                    let _ = tremolite_emotion::save_emotion(state, None, &file_path);
                 }
 
                 Ok(EventResponse::Pass)
@@ -149,20 +164,13 @@ impl Module for EmotionModule {
                 for state in self.states.values_mut() {
                     state.natural_fluctuation();
                 }
-                // Startup 波动后持久化
-                eprintln!("[emotion-debug] Startup: file_path='{}' len={}",
-                    file_path, self.states.len());
                 if !file_path.is_empty() {
                     if let Some(state) = self.states.get("") {
-                        eprintln!("[emotion-debug] Saving after startup fluctuation: joy={}", state.joy);
-                        let now = tremolite_emotion::now_iso();
-                        let file = tremolite_emotion::EmotionFile {
-                            plutchik: state.as_plutchik(),
-                            energy: 50.0,
-                            last_update: now.clone(),
-                            last_fluctuation: Some(now),
-                        };
-                        let _ = file.save(&file_path);
+                        eprintln!(
+                            "[emotion-debug] Saving after startup fluctuation: joy={}",
+                            state.joy
+                        );
+                        let _ = tremolite_emotion::save_emotion(state, Some("fluctuation"), &file_path);
                     }
                 }
                 Ok(EventResponse::Pass)

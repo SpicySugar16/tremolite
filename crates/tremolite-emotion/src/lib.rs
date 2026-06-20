@@ -73,6 +73,9 @@ pub const SINGLE_LABELS: &[(&str, &str)] = &[
 pub enum Intensity { 极强, 强, 中, 弱, 微 }
 
 impl Intensity {
+    pub fn index(&self) -> usize {
+        match self { Intensity::极强 => 0, Intensity::强 => 1, Intensity::中 => 2, Intensity::弱 => 3, Intensity::微 => 4 }
+    }
     pub fn as_str(&self) -> &'static str {
         match self { Intensity::极强 => "极强", Intensity::强 => "强", Intensity::中 => "中",
                      Intensity::弱 => "弱", Intensity::微 => "微" }
@@ -111,7 +114,7 @@ pub struct EmotionResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToneLevel {
     pub style: String,
-    #[serde(default)] pub 口癖: Option<Vec<String>>,
+    #[serde(default)] pub 口癖: Option<String>,
     pub emoji: Option<String>,
     #[serde(default)] pub 模板: Option<ToneTemplate>,
 }
@@ -200,12 +203,62 @@ impl EmotionFile {
             Some(ts) => ts,
             None => return true, // 从未波动过
         };
-        let now = unix_ts_secs();
-        match last.parse::<u64>() {
-            Ok(ts) => now.saturating_sub(ts) >= interval_secs,
-            Err(_) => true,
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        // 支持 ISO 8601 和 UNIX 秒数两种格式
+        if let Ok(ts) = last.parse::<u64>() {
+            now.saturating_sub(ts) >= interval_secs
+        } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(last) {
+            let ts = dt.timestamp() as u64;
+            now.saturating_sub(ts) >= interval_secs
+        } else {
+            true
         }
     }
+}
+
+/// 保存带 source 标记（仿 Hermes：fluctuation 写入 last_fluctuation，其他保留旧值）
+pub fn save_emotion(state: &EmotionState, source: Option<&str>, path: &str) -> Result<(), String> {
+    let expanded = if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        path.replacen("~", &home, 1)
+    } else {
+        path.to_string()
+    };
+
+    // 读现有的 last_fluctuation（兼容数字和字符串格式）
+    let existing_lf = std::fs::read_to_string(&expanded).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("last_fluctuation").and_then(|x| {
+                x.as_str().map(String::from)
+                    .or_else(|| x.as_i64().map(|n| n.to_string()))
+            })
+        });
+
+    let now_iso = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string();
+    let mut data = serde_json::json!({
+        "plutchik": {
+            "joy": state.joy, "sadness": state.sadness, "anger": state.anger,
+            "fear": state.fear, "surprise": state.surprise, "disgust": state.disgust,
+            "anticipation": state.anticipation, "trust": state.trust,
+        },
+        "energy": 50.0,
+        "last_update": now_iso,
+    });
+
+    if source == Some("fluctuation") {
+        data["last_fluctuation"] = serde_json::Value::String(now_iso);
+    } else if let Some(lf) = existing_lf {
+        data["last_fluctuation"] = serde_json::Value::String(lf);
+    }
+
+    if let Some(parent) = std::path::Path::new(&expanded).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    std::fs::write(&expanded, &json).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ─── 时间工具 ──────────────────────────────────
@@ -463,7 +516,6 @@ impl ToneMap {
 
         let mut lines = vec![
             format!("当前：{} 强度：{}", result.label, result.intensity.as_str()),
-            format!("风格：{}", level.style),
         ];
         if !examples.is_empty() { lines.push(examples); }
         if !particles.is_empty() { lines.push(particles); }

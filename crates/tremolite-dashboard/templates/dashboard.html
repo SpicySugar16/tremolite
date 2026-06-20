@@ -68,7 +68,7 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .toggle .sl:before{position:absolute;content:"";height:12px;width:12px;left:2px;bottom:2px;background:var(--fg2);border-radius:50%;transition:0.2s}
 .toggle input:checked+.sl{background:var(--accent-dim);border-color:var(--accent-border)}
 .toggle input:checked+.sl:before{background:var(--accent);transform:translateX(14px)}
-.dim-row{display:flex;align-items:center;gap:6px;padding:4px 0}
+.dim-row{display:flex;align-items:center;gap:6px;padding:4px 0;position:relative}
 .dim-label{width:42px;font-size:0.78rem;color:var(--fg2);flex-shrink:0;text-align:right}
 .dim-slider{-webkit-appearance:none;appearance:none;flex:1;height:4px;background:var(--bg3);border-radius:2px;outline:none;cursor:pointer;accent-color:var(--accent)}
 .dim-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--bg);cursor:pointer}
@@ -238,18 +238,19 @@ async function renderEmotion(el){
   if(d.status!=='ok'||!d.data){
     el.innerHTML='<div class="card"><div class="loading">情绪数据不可用</div></div>'; return;
   }
-  const cur=d.data.current||{},style=d.data.style||{},plutchik=cur.plutchik||{},history=d.data.history||[],version=d.data.version||'?';
+  const cur=d.data.current||{},style=d.data.style||{},plutchik=cur.plutchik||{},history=d.data.history||[],version=d.data.version||'?',interval=d.data.auto_fluctuation_seconds||1800;
   let html='';
   // 顶部双栏
-  html+='<div class="grid-2">';
+  html+='<div class="grid-2" id="emotion-status-cards">';
   html+='<div class="card"><div class="card-hd"><h3>❤ 情绪状态</h3></div>'+
     '<div class="row"><span class="l">主导情绪</span><span class="v"><span class="badge-accent">'+esc(style.style_label||'?')+'</span></span></div>'+
     '<div class="row"><span class="l">复合情绪</span><span class="v">'+esc(style.composite||'?')+'</span></div>'+
     '<div class="row"><span class="l">情绪维度</span><span class="v">'+esc(style.dominant||'?')+'</span></div></div>';
   html+='<div class="card"><div class="card-hd"><h3>✎ 风格注入</h3></div>'+
-    '<div class="row"><span class="l">风格标签</span><span class="v">'+esc(style.style_label||'?')+'</span></div>'+
+    '<div class="row"><span class="l">emoji</span><span class="v">'+esc(style.emoji||'')+'</span></div>'+
     '<div class="row"><span class="l">例句</span><span class="v" style="color:var(--accent);font-style:italic">"'+esc(style.example||'')+'"</span></div>'+
-    '<div class="row"><span class="l">注入短语</span><span class="v">'+esc(style.composite||style.style_label||'?')+'</span></div></div>';
+    (style.injection ? '<div style="margin-top:6px;padding:6px 8px;background:var(--bg2);border-radius:var(--radius-sm);font-size:0.72rem;font-family:var(--mono);white-space:pre-wrap;color:var(--fg2)">'+esc(style.injection)+'</div>' : '')+
+    '</div>';
   html+='</div>';
   // 八维情绪滑块（2列）
   html+='<div class="card"><div class="card-hd"><h3>📊 Plutchik 八维情绪</h3></div><div class="grid-2">';
@@ -260,7 +261,7 @@ async function renderEmotion(el){
       const label=EMOTION_DIMS[key]||key;
       const val=Math.round(plutchik[key]||50);
       html+='<div class="dim-row"><div class="dim-label">'+label+'</div>'+
-        '<input type="range" class="dim-slider" min="0" max="100" value="'+val+'" oninput="updateSlider(this,\''+key+'\')">'+
+        '<input type="range" class="dim-slider" min="0" max="100" value="'+val+'" data-key="'+key+'" oninput="updateSlider(this)" onclick="seekSlider(event)">'+
         '<input type="number" class="dim-input" min="0" max="100" value="'+val+'" onchange="updateNumber(this,\''+key+'\')"></div>';
     }
     html+='</div>';
@@ -282,6 +283,13 @@ async function renderEmotion(el){
     html+='</tbody></table>';
   }
   html+='</div>';
+  // 自动波动间隔
+  html+='<div style="display:flex;align-items:center;gap:10px;padding:6px 0;font-size:0.78rem;margin-top:4px">'+
+    '<span style="color:var(--fg2)">⏱ 自动波动</span>'+
+    '<input type="number" class="dim-input" min="1" max="60" value="'+Math.round(interval/60)+'" onchange="updateInterval(this.value)" style="width:60px">'+
+    '<span style="color:var(--fg3);font-size:0.72rem">分钟</span>'+
+    '<span style="color:var(--fg3);font-size:0.7rem;margin-left:4px" id="intervalFeedback"></span>'+
+    '</div>';
   // 底部按钮+版本号
   html+='<div style="display:flex;align-items:center;gap:12px;margin-top:4px">'+
     '<button class="btn" onclick="refreshEmotion()">↻ 刷新</button>'+
@@ -292,27 +300,72 @@ async function renderEmotion(el){
 
 // ─── Emotion slider handlers ────
 let emotionDebounce=null;
-window.updateSlider=function(el,key){
+window.updateSlider=function(el){
+  const key=el.dataset.key;
   const val=parseInt(el.value);
   el.nextElementSibling.value=val;
   clearTimeout(emotionDebounce);
-  emotionDebounce=setTimeout(()=>apiPost('/dashboard/emotion/update',{dimension:key,value:val}),300);
+  emotionDebounce=setTimeout(async()=>{
+    await apiPost('/dashboard/emotion/update',{dimension:key,value:val});
+    refreshEmotionCards();
+  },300);
+};
+window.seekSlider=function(e){
+  const el=e.target;
+  const r=el.getBoundingClientRect();
+  const v=Math.round(((e.clientX-r.left)/r.width)*100);
+  el.value=Math.max(0,Math.min(100,v));
+  el.dispatchEvent(new Event('input',{bubbles:true}));
 };
 window.updateNumber=function(el,key){
   const val=Math.min(100,Math.max(0,parseInt(el.value)||0));
   el.value=val;el.previousElementSibling.value=val;
-  apiPost('/dashboard/emotion/update',{dimension:key,value:val});
+  apiPost('/dashboard/emotion/update',{dimension:key,value:val}).then(()=>refreshEmotionCards());
 };
 window.refreshEmotion=function(){
   const el=document.getElementById('pageContent');
   el.innerHTML='<div class="loading">刷新中...</div>';
   renderEmotion(el);
 };
+async function refreshEmotionCards(){
+  const container=document.getElementById('emotion-status-cards');
+  if(!container)return;
+  try{
+    const d=await api('/dashboard/emotion');
+    if(d.status!=='ok'||!d.data)return;
+    const cur=d.data.current||{},style=d.data.style||{};
+    container.innerHTML='<div class="card"><div class="card-hd"><h3>❤ 情绪状态</h3></div>'+
+      '<div class="row"><span class="l">主导情绪</span><span class="v"><span class="badge-accent">'+esc(style.style_label||'?')+'</span></span></div>'+
+      '<div class="row"><span class="l">复合情绪</span><span class="v">'+esc(style.composite||'?')+'</span></div>'+
+      '<div class="row"><span class="l">情绪维度</span><span class="v">'+esc(style.dominant||'?')+'</span></div></div>'+
+    '<div class="card"><div class="card-hd"><h3>✎ 风格注入</h3></div>'+
+      '<div class="row"><span class="l">emoji</span><span class="v">'+esc(style.emoji||'')+'</span></div>'+
+      '<div class="row"><span class="l">例句</span><span class="v" style="color:var(--accent);font-style:italic">"'+esc(style.example||'')+'"</span></div>'+
+      (style.injection ? '<div style="margin-top:6px;padding:6px 8px;background:var(--bg2);border-radius:var(--radius-sm);font-size:0.72rem;font-family:var(--mono);white-space:pre-wrap;color:var(--fg2)">'+esc(style.injection)+'</div>' : '')+
+      '</div>';
+  }catch(e){}
+}
 window.fluctuateEmotion=async function(){
   const el=document.getElementById('pageContent');
   el.innerHTML='<div class="loading">波动中...</div>';
   try{ await apiPost('/dashboard/emotion/fluctuate'); await renderEmotion(el); }
   catch(e){ el.innerHTML='<div class="error">波动失败: '+esc(e.message)+'</div>'; }
+};
+window.updateInterval=async function(minutes){
+  const fb=document.getElementById('intervalFeedback');
+  if(fb){fb.textContent='保存中...';fb.style.color='var(--fg2)';}
+  try{
+    const seconds=Math.max(60,Math.min(3600,(parseInt(minutes)||30)*60));
+    const r=await apiPost('/dashboard/emotion/interval',{seconds});
+    if(r.status==='ok'){
+      if(fb){fb.textContent='✓ 已更新';fb.style.color='var(--green)';}
+      setTimeout(()=>{if(fb)fb.textContent='';},2000);
+    }else{
+      if(fb){fb.textContent='✗ 失败';fb.style.color='var(--red)';}
+    }
+  }catch(e){
+    if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
+  }
 };
 
 // ─── Chat Page ────

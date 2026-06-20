@@ -113,6 +113,8 @@ async fn run_server_inner(
         .route("/dashboard/emotion", get(handle_emotion_status))
         .route("/dashboard/emotion/update", post(handle_emotion_update))
         .route("/dashboard/emotion/fluctuate", post(handle_emotion_fluctuate))
+        .route("/dashboard/emotion/interval", get(handle_emotion_interval_get))
+        .route("/dashboard/emotion/interval", post(handle_emotion_interval_set))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -931,57 +933,47 @@ fn compute_emotion_style(plutchik: &serde_json::Map<String, serde_json::Value>) 
         .max_by(|a, b| a.1.as_f64().unwrap_or(0.0).partial_cmp(&b.1.as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(k, _)| k.as_str())
         .unwrap_or("trust");
-    // 找第二高（用来算复合）
-    let mut sorted: Vec<(&str, f64)> = plutchik.iter()
-        .filter_map(|(k, v)| Some((k.as_str(), v.as_f64()?)))
-        .collect();
-    sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let second = sorted.get(1).map(|(k, _)| *k).unwrap_or("");
 
-    // 风格标签
-    let style_label = match dominant {
-        "joy" => "积极乐观",
-        "trust" => "安稳信任",
-        "fear" => "不安警惕",
-        "surprise" => "意外困惑",
-        "sadness" => "低落忧郁",
-        "disgust" => "排斥不满",
-        "anger" => "冲动易怒",
-        "anticipation" => "期待向前",
-        _ => "平静稳定",
-    };
+    // 从 EmotionState 计算复合标签 + 强度
+    let mut state = tremolite_emotion::EmotionState::new();
+    if let Some(v) = plutchik.get("joy").and_then(|x| x.as_f64()) { state.joy = v; }
+    if let Some(v) = plutchik.get("sadness").and_then(|x| x.as_f64()) { state.sadness = v; }
+    if let Some(v) = plutchik.get("anger").and_then(|x| x.as_f64()) { state.anger = v; }
+    if let Some(v) = plutchik.get("fear").and_then(|x| x.as_f64()) { state.fear = v; }
+    if let Some(v) = plutchik.get("surprise").and_then(|x| x.as_f64()) { state.surprise = v; }
+    if let Some(v) = plutchik.get("disgust").and_then(|x| x.as_f64()) { state.disgust = v; }
+    if let Some(v) = plutchik.get("anticipation").and_then(|x| x.as_f64()) { state.anticipation = v; }
+    if let Some(v) = plutchik.get("trust").and_then(|x| x.as_f64()) { state.trust = v; }
+    let result = state.emotion_result();
+    let composite = result.label.clone();
 
-    // 复合情绪
-    let composite = match (dominant, second) {
-        ("joy", "trust") | ("trust", "joy") => "恋爱",
-        ("joy", "anticipation") | ("anticipation", "joy") => "乐观",
-        ("trust", "fear") | ("fear", "trust") => "服从",
-        ("fear", "surprise") | ("surprise", "fear") => "敬畏",
-        ("surprise", "sadness") | ("sadness", "surprise") => "不赞同",
-        ("sadness", "disgust") | ("disgust", "sadness") => "懊悔",
-        ("disgust", "anger") | ("anger", "disgust") => "轻蔑",
-        ("anger", "anticipation") | ("anticipation", "anger") => "攻击性",
-        _ => style_label,
-    };
+    // 用 ToneMap 读风格数据（injection 由 get_injection 动态生成）
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tone_path = std::path::Path::new(&home).join(".tremolite").join("data").join("tone_map.json");
+    let tone_map = tremolite_emotion::ToneMap::load(&tone_path.to_string_lossy());
+    let injection = tone_map.get_injection(&result).unwrap_or_default();
 
-    // 例句
-    let example = match dominant {
-        "joy" => "这个走向，不算坏呢。",
-        "trust" => "嗯，交给葵就好了。",
-        "fear" => "噜噜……有点不安。",
-        "surprise" => "诶，这样的吗。",
-        "sadness" => "……有点低落。",
-        "disgust" => "唔……这个走向不太好。",
-        "anger" => "不行，这个葵不接受。",
-        "anticipation" => "还有往前的空间喔。",
-        _ => "嗯，就这样吧。",
-    };
+    // 从 tone_map 原始数据提取 emoji/style_label/example
+    let mut style_label = dominant.to_string();
+    let mut emoji = String::new();
+    let mut example = String::new();
+    if let Some(entry) = tone_map.entries.get(&composite) {
+        if let Some(level) = entry.levels.get(result.intensity.as_str()) {
+            style_label = level.style.clone();
+            if let Some(e) = &level.emoji { emoji = e.clone(); }
+            if let Some(tpl) = &level.模板 {
+                if let Some(e) = tpl.句式示例.first() { example = e.clone(); }
+            }
+        }
+    }
 
     serde_json::json!({
         "dominant": dominant,
         "style_label": style_label,
         "composite": composite,
         "example": example,
+        "emoji": emoji,
+        "injection": injection,
     })
 }
 
@@ -1004,6 +996,8 @@ async fn handle_emotion_status() -> Json<serde_json::Value> {
 
     // 风格
     let style = compute_emotion_style(&plutchik);
+    // 读自动波动间隔
+    let interval = emotion_data.get("auto_fluctuation_seconds").and_then(|v| v.as_f64()).unwrap_or(1800.0);
 
     Json(serde_json::json!({
         "status": "ok",
@@ -1014,6 +1008,7 @@ async fn handle_emotion_status() -> Json<serde_json::Value> {
             },
             "style": style,
             "history": history,
+            "auto_fluctuation_seconds": interval,
             "version": "0.3.1",
         }
     }))
@@ -1126,6 +1121,49 @@ async fn handle_emotion_fluctuate() -> Json<serde_json::Value> {
     let _ = std::fs::write(&hist_path, serde_json::to_string_pretty(&history).unwrap_or_default());
 
     Json(serde_json::json!({"status": "ok"}))
+}
+
+// ─── Handler: 读取自动波动间隔 ──────────────────
+async fn handle_emotion_interval_get() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
+    let path = data_dir.join("emotion.json");
+
+    let data: serde_json::Value = std::fs::read_to_string(&path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let interval = data.get("auto_fluctuation_seconds").and_then(|v| v.as_f64()).unwrap_or(1800.0);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "auto_fluctuation_seconds": interval,
+    }))
+}
+
+// ─── Handler: 设置自动波动间隔 ──────────────────
+async fn handle_emotion_interval_set(
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
+    let path = data_dir.join("emotion.json");
+
+    let seconds = payload.get("seconds").and_then(|v| v.as_f64()).unwrap_or(1800.0);
+    let seconds = seconds.max(10.0).min(3600.0);
+
+    let mut data: serde_json::Value = std::fs::read_to_string(&path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("auto_fluctuation_seconds".into(), serde_json::json!(seconds));
+    }
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&data).unwrap_or_default());
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "auto_fluctuation_seconds": seconds,
+    }))
 }
 
 // ─── Handler: 配置包详情数据 ────────────────────

@@ -1,12 +1,9 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::sync::Arc;
 
-use tremolite_plugin::{Capability, Plugin, PluginAction, PluginContext, PluginError, PluginEvent, PluginKind};
-
-/// 波动间隔（秒）——30 分钟
-const FLUCTUATION_INTERVAL_SECS: u64 = 1800;
+use tremolite_plugin::{
+    Capability, Plugin, PluginAction, PluginContext, PluginError, PluginEvent, PluginKind,
+};
 
 /// 情绪数据文件路径
 fn emotion_file_path() -> std::path::PathBuf {
@@ -14,13 +11,11 @@ fn emotion_file_path() -> std::path::PathBuf {
     std::path::PathBuf::from(home).join(".tremolite").join("emotion.json")
 }
 
-/// 情绪引擎插件——带独立定时器，每30分钟自动波动💕
+/// 情绪引擎插件——波动在 PreLlm 中按时间触发（仿 Hermes）
 pub struct EmotionPlugin {
     /// 线程安全的情绪状态
     state: Arc<Mutex<super::EmotionState>>,
     initialized: bool,
-    /// 定时器线程的停止信号
-    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl EmotionPlugin {
@@ -28,51 +23,15 @@ impl EmotionPlugin {
         Self {
             state: Arc::new(Mutex::new(super::EmotionState::new())),
             initialized: false,
-            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// 持久化当前状态到文件
+    /// 持久化当前状态到文件（非波动不更新 last_fluctuation）
     fn persist(&self) {
         let path = emotion_file_path();
         if let Ok(state) = self.state.lock() {
-            let file = super::EmotionFile {
-                plutchik: state.as_plutchik(),
-                energy: 50.0,
-                last_update: super::now_iso(),
-                last_fluctuation: Some(super::now_iso()),
-            };
-            let _ = file.save(path.to_str().unwrap_or(""));
+            let _ = super::save_emotion(&state, None, path.to_str().unwrap_or(""));
         }
-    }
-
-    /// 启动后台定时波动线程
-    fn start_timer(state: Arc<Mutex<super::EmotionState>>, shutdown: Arc<AtomicBool>) {
-        thread::spawn(move || {
-            loop {
-                // 每30秒检查一次停止信号（比直接睡 30min 更优雅）
-                for _ in 0..FLUCTUATION_INTERVAL_SECS / 30 {
-                    if shutdown.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    thread::sleep(Duration::from_secs(30));
-                }
-
-                // 触发自然波动
-                if let Ok(mut s) = state.lock() {
-                    s.natural_fluctuation();
-                    // 持久化
-                    let path = emotion_file_path();
-                    let file = super::EmotionFile {
-                        plutchik: s.as_plutchik(),
-                        energy: 50.0,
-                        last_update: super::now_iso(),
-                        last_fluctuation: Some(super::now_iso()),
-                    };
-                    let _ = file.save(path.to_str().unwrap_or(""));
-                }
-            }
-        });
     }
 }
 
@@ -104,16 +63,13 @@ impl Plugin for EmotionPlugin {
             }
         }
 
-        // 启动后台定时波动线程
-        Self::start_timer(self.state.clone(), self.shutdown_flag.clone());
+        // 不再启动后台定时器，波动改由 PreLlm 检查时间触发（仿 Hermes）
 
         self.initialized = true;
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<(), PluginError> {
-        // 停止定时器
-        self.shutdown_flag.store(true, Ordering::Relaxed);
         // 持久化最终状态
         self.persist();
         self.initialized = false;
@@ -129,6 +85,36 @@ impl Plugin for EmotionPlugin {
             PluginEvent::PreLlm { messages } => {
                 let mut state = self.state.lock().map_err(|e| PluginError(e.to_string()))?;
 
+                // 0. 时间检查：距上次波动超过 30 分钟则触发自然波动（仿 Hermes pre_llm_call）
+                let path_str = emotion_file_path().to_string_lossy().to_string();
+                if std::path::Path::new(&path_str).exists() {
+                    if let Ok(raw) = std::fs::read_to_string(&path_str) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            let last_fluc = val.get("last_fluctuation")
+                                .or_else(|| val.get("last_update"))
+                                .and_then(|x| x.as_str());
+                            if let Some(lf) = last_fluc {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                let elapsed = if let Ok(ts) = lf.parse::<u64>() {
+                                    now.saturating_sub(ts)
+                                } else if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(lf) {
+                                    now.saturating_sub(dt.timestamp() as u64)
+                                } else {
+                                    0
+                                };
+                                if elapsed >= 1800 {
+                                    state.natural_fluctuation();
+                                    let _ = super::save_emotion(
+                                        &state, Some("fluctuation"),
+                                        &path_str,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 1. 从对话中检测情绪
                 for msg in messages {
                     state.detect_from_text(msg);
@@ -137,10 +123,17 @@ impl Plugin for EmotionPlugin {
                 // 2. 线性衰减（每次对话衰减 1 分钟）
                 state.decay(1);
 
-                // 3. 注入情绪风格提示
-                let composite = state.composite_emotion();
-                let style = super::style_from_emotion(&composite);
-                let injection = format!("[当前情绪: {} | 风格: {}]", composite, style);
+                // 3. 注入情绪风格提示（从配置包读）
+                let tone_map = super::ToneMap::load(
+                    &std::path::PathBuf::from(
+                        &std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+                    ).join(".tremolite").join("tone_map.json")
+                    .to_string_lossy().to_string()
+                );
+                let result = state.emotion_result();
+                let injection = tone_map.get_injection(&result).unwrap_or_else(|| {
+                    format!("[当前情绪: {}]", result.label)
+                });
                 Ok(Some(PluginAction::Rewrite { text: injection }))
             }
             PluginEvent::PostLlm { response } => {
