@@ -287,6 +287,19 @@ fn main() {
             }
         });
     }
+    // 写出模块注册表供 dashboard API 动态读取
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let reg_path = std::path::PathBuf::from(&home)
+            .join(".tremolite").join("data").join("tremolite").join("modules_registry.json");
+        let infos = engine.modules.handle().list_modules();
+        if let Ok(json) = serde_json::to_string_pretty(&infos) {
+            if let Some(parent) = reg_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&reg_path, &json);
+        }
+    }
     println!("  Modules registered ✓");
 
     // ── 6. 初始化定时任务 ────────────────────────

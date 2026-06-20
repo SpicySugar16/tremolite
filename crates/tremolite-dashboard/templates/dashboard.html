@@ -22,7 +22,7 @@ body{background:var(--bg);color:var(--fg);font-family:var(--font);min-height:100
 .topbar .badge{display:inline-block;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent-border);border-radius:12px;padding:2px 10px;font-size:0.72rem}
 .topbar .sub{color:var(--fg2);font-size:0.75rem;margin-left:auto}
 .layout{display:grid;grid-template-columns:200px 1fr;height:calc(100vh - 46px)}
-.sidebar{background:var(--bg2);border-right:1px solid var(--border);padding:10px 0;overflow-y:auto}
+.sidebar{background:var(--bg2);border-right:1px solid var(--border);padding:10px 0;overflow-y:auto;min-height:0;height:100%}
 .sidebar .sep{border-top:1px solid var(--border);margin:6px 12px}
 .nav-item{padding:7px 16px;cursor:pointer;font-size:0.82rem;color:var(--fg2);transition:all 0.15s;display:flex;align-items:center;gap:6px}
 .nav-item:hover{background:var(--accent-dim);color:var(--fg)}
@@ -137,7 +137,7 @@ async function renderContent(){
   let statusData={};
   try{ statusData=await api('/dashboard/status'); }catch(e){}
   const s=statusData.system||{};
-  document.getElementById('statusBadge').textContent=s.status||'ok';
+  document.getElementById('statusBadge').textContent=statusData.system?'online':'offline';
   document.getElementById('uptimeDisplay').textContent='v'+(s.version||'?')+' · '+fmtUptime(s.uptime_secs||0);
   
   switch(currentPage){
@@ -159,7 +159,7 @@ async function renderContent(){
 // ─── Status Page ────
 async function renderStatus(el,d){
   try{
-    const ec=d.emotion||{};
+
     const mc=d.memory||{};
     const sc=d.skills||{};
     const mods=d.modules||{};
@@ -167,10 +167,6 @@ async function renderStatus(el,d){
 
     let html='<div class="grid-2">';
     // Emotion card
-    html+='<div class="card"><div class="card-hd"><h3>\uD83E\uDDE0 情绪</h3></div>'+
-      '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+(ec.display||'?')+'</span></span></div>'+
-      '<div class="row"><span class="l">复合</span><span class="v">'+(ec.composite||'-')+'</span></div>'+
-      '<div class="row"><span class="l">主导</span><span class="v">'+(ec.dominant||'-')+'</span></div></div>';
     // Memory card
     html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDCBE 记忆</h3></div>'+
       '<div class="row"><span class="l">总计</span><span class="v">'+(mc.total_entries||0)+'</span></div>'+
@@ -398,6 +394,31 @@ async function renderModule(el,modId,statusData){
     const d=await api('/dashboard/engine/'+modId);
     let html='<div class="card"><div class="card-hd"><h3>\u25C9 '+esc(modId)+'</h3></div>';
     if(d.status==='ok'){
+      if(modId==='core'&&d.data&&d.data['模块列表']){
+        const dd=d.data;
+        // 基本信息卡片
+        html+='<div class=\"grid-2\">';
+        html+='<div class=\"card\"><div class=\"card-hd\"><h3>基础</h3></div>'+
+          '<div class=\"row\"><span class=\"l\">LLM 模型</span><span class=\"v\">'+esc(dd['LLM模型']||'?')+'</span></div>'+
+          '<div class=\"row\"><span class=\"l\">版本</span><span class=\"v\">'+esc(dd['版本']||'?')+'</span></div>'+
+          '<div class=\"row\"><span class=\"l\">状态</span><span class=\"v\"><span class=\"badge-accent\">'+esc(dd['状态']||'?')+'</span></span></div>'+
+          '<div class=\"row\"><span class=\"l\">运行时间</span><span class=\"v\">'+esc(dd['运行时间']||'?')+'</span></div></div>';
+        html+='<div class=\"card\"><div class=\"card-hd\"><h3>负载</h3></div>'+
+          '<div class=\"row\"><span class=\"l\">注册模块数</span><span class=\"v\">'+(dd['注册模块数']||0)+'</span></div>'+
+          '<div class=\"row\"><span class=\"l\">模块启用数</span><span class=\"v\">'+(dd['模块启用数']||0)+'</span></div></div>';
+        html+='</div>';
+        // 模块列表+开关
+        html+='<div class=\"card\"><div class=\"card-hd\"><h3>模块列表</h3><button class=\"btn sm accent\" onclick=\"restartTremolite()\" id=\"restartBtn\">重启生效</button></div>'+
+          '<div style=\"color:var(--fg2);font-size:0.72rem;margin-bottom:8px\">点击开关启用或禁用模块，然后点「重启生效」</div>';
+        for(const m of dd['模块列表']){
+          const mid=m.id,name=m.name,en=m.enabled;
+          html+='<div style=\"display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-bottom:1px solid var(--bg3);font-size:0.82rem\">'+
+            '<span>'+esc(name)+'</span>'+
+            '<label class=\"toggle\"><input type=\"checkbox\" '+(en?'checked':'')+' onchange=\"toggleModule(\''+esc(mid)+'\',this.checked)\"><span class=\"sl\"></span></label>'+
+            '</div>';
+        }
+        html+='</div>';
+      }else{
       for(const [k,v] of Object.entries(d)){
         if(k==='status')continue;
         if(typeof v==='object'&&v!==null&&!Array.isArray(v)){
@@ -424,6 +445,7 @@ async function renderModule(el,modId,statusData){
         }else{
           html+='<div class="row"><span class="l">'+esc(k)+'</span><span class="v">'+esc(String(v))+'</span></div>';
         }
+      }
       }
     }else{
       // Fallback: show info from status data
@@ -465,6 +487,23 @@ async function renderModule(el,modId,statusData){
   }
 }
 
+// ─── Global functions ────
+window.toggleModule=async function(id,enabled){
+  const r=await apiPost('/dashboard/engine/core/modules/'+id+'/toggle',{enabled});
+  if(r.status!=='ok')alert('切换失败');
+};
+window.restartTremolite=async function(){
+  const btn=document.getElementById('restartBtn');
+  btn.textContent='重启中...';btn.disabled=true;
+  const r=await apiPost('/dashboard/engine/core/restart');
+  if(r.status==='ok'){
+    btn.textContent='已触发重启';
+    setTimeout(()=>{btn.textContent='重启生效';btn.disabled=false},3000);
+  }else{
+    btn.textContent='重启失败';
+    setTimeout(()=>{btn.textContent='重启生效';btn.disabled=false},3000);
+  }
+};
 // ─── Init ────
 function init(){
   // Read hash routing

@@ -120,8 +120,8 @@ pub fn parse_args() -> ParsedCommand {
     let log_level = parse_opt_string(&args, &["-l", "--log-level"]).unwrap_or_else(|| "info".into());
     let session_id = parse_opt_string(&args, &["--session"]).unwrap_or_default();
     let gateway_url = parse_opt_string(&args, &["--gateway-url"]).unwrap_or_else(|| "http://localhost:8080".into());
-    let port = parse_opt_uint(&args, &["--port"]).unwrap_or(721u16);
-    let dashboard_port = parse_opt_uint(&args, &["--dashboard-port"]).unwrap_or(9090u16);
+    let port = parse_opt_uint(&args, &["--port"]).unwrap_or(5835u16);
+    let dashboard_port = parse_opt_uint(&args, &["--dashboard-port"]).unwrap_or(5835u16);
 
     // 找第一个非 flag 的参数作为子命令
     let subcmd_name = args.iter()

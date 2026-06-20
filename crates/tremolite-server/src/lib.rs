@@ -108,6 +108,8 @@ async fn run_server_inner(
         .route("/dashboard/logs", get(handle_dashboard_logs))
         .route("/dashboard/sessions", get(handle_dashboard_sessions))
         .route("/dashboard/engine/{mod_id}", get(handle_engine_mod))
+        .route("/dashboard/engine/core/modules/{mod_id}/toggle", post(handle_module_toggle))
+        .route("/dashboard/engine/core/restart", post(handle_restart))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -468,14 +470,27 @@ async fn handle_dashboard_status(
         .map(|v| v.as_object().map(|o| o.len()).unwrap_or(0))
         .unwrap_or(0);
 
-    // 模拟模块列表——从 engine/ 端点推测
-    let module_names: Vec<&str> = vec!["core", "emotion", "memory", "attention", "skill", "reflection", "compress", "delegation", "channels", "user"];
-    let module_labels: std::collections::HashMap<&str, &str> = [
-        ("core", "核心引擎"), ("emotion", "情绪引擎"), ("memory", "记忆系统"),
-        ("attention", "注意力系统"), ("skill", "技能系统"), ("reflection", "反思引擎"),
-        ("compress", "压缩引擎"), ("delegation", "任务委派"),
-        ("channels", "消息通道"), ("user", "用户管理"),
-    ].iter().cloned().collect();
+    // 从注册表文件读取实际安装的模块
+    let home = std::env::var("HOME").unwrap_or_default();
+    let reg_path = std::path::PathBuf::from(&home)
+        .join(".tremolite").join("data").join("tremolite").join("modules_registry.json");
+    let registered_mods: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
+        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+        .unwrap_or_default();
+    let mut module_entries: Vec<serde_json::Value> = Vec::new();
+    // 核心引擎固定显示
+    module_entries.push(serde_json::json!({"name": "core", "label": "核心引擎"}));
+    for m in &registered_mods {
+        let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+        module_entries.push(serde_json::json!({"name": id, "label": name}));
+    }
+    // 去重（避免 dashboard 等模块在两种模式下重复注册）
+    let mut seen = std::collections::HashSet::new();
+    module_entries.retain(|e| {
+        let n = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        seen.insert(n.to_string())
+    });
 
     // 读 profiles 列表
     let home = std::env::var("HOME").unwrap_or_default();
@@ -564,7 +579,7 @@ async fn handle_dashboard_status(
             "total_practices": 0,
         },
         "modules": {
-            "registered": module_names.iter().map(|n| serde_json::json!({"name": n, "label": module_labels.get(n).unwrap_or(n)})).collect::<Vec<_>>(),
+            "registered": module_entries,
         },
         "profiles": profiles_list,
         "profile": {
@@ -584,6 +599,7 @@ async fn handle_dashboard_status(
 use axum::extract::Path;
 
 async fn handle_engine_mod(
+    Extension(state): Extension<Arc<AppState>>,
     axum::extract::Path(mod_id): Path<String>,
 ) -> Json<serde_json::Value> {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -609,19 +625,68 @@ async fn handle_engine_mod(
         .unwrap_or(0);
 
     let data = match mod_id.as_str() {
-        "core" => serde_json::json!({
-            "LLM模型": "deepseek-v4-flash",
-            "注册模块数": 9,
-            "情绪状态": dominant,
-            "版本": env!("CARGO_PKG_VERSION"),
-            "状态": "运行中",
-            "运行时间": format_uptime(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            ),
-        }),
+        "core" => {
+            // 读 LLM 配置
+            let llm_model = std::fs::read_to_string(tremolite_dir.join("config.toml")).ok()
+                .and_then(|s| {
+                    for line in s.lines() {
+                        let t = line.trim();
+                        if let Some(v) = t.strip_prefix("default = \"") {
+                            if let Some(end) = v.find('"') {
+                                return Some(v[..end].to_string());
+                            }
+                        } else if t.starts_with("default = '") {
+                            if let Some(end) = t[11..].find('\'') {
+                                return Some(t[11..11+end].to_string());
+                            }
+                        }
+                    }
+                    None
+                })
+                .unwrap_or_else(|| "deepseek-v4-flash".into());
+            // 读模块状态
+            let state_path = tremolite_dir.join("data").join("tremolite").join("modules_state.json");
+            let mod_states = std::fs::read_to_string(&state_path).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .unwrap_or(serde_json::json!({}));
+            let mut mod_list = Vec::new();
+            // 从注册表文件读取实际安装的模块
+            let reg_path = tremolite_dir.join("data").join("tremolite").join("modules_registry.json");
+            let registered_mods: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
+                .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+                .unwrap_or_default();
+            // 核心引擎固定显示
+            mod_list.push(serde_json::json!({
+                "id": "core",
+                "name": "核心引擎",
+                "enabled": mod_states.get("core").and_then(|v| v.as_bool()).unwrap_or(true),
+            }));
+            for m in &registered_mods {
+                let mid = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(mid);
+                let enabled = mod_states.get(mid).and_then(|v| v.as_bool()).unwrap_or(true);
+                mod_list.push(serde_json::json!({
+                    "id": mid,
+                    "name": name,
+                    "enabled": enabled,
+                }));
+            }
+            // 去重
+            let mut seen = std::collections::HashSet::new();
+            mod_list.retain(|e| {
+                let n = e.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                seen.insert(n)
+            });
+            serde_json::json!({
+                "LLM模型": llm_model,
+                "注册模块数": mod_list.len(),
+                "模块启用数": mod_list.iter().filter(|m| m.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)).count(),
+                "版本": env!("CARGO_PKG_VERSION"),
+                "状态": "运行中",
+                "运行时间": format_uptime(state.uptime_secs()),
+                "模块列表": mod_list,
+            })
+        },
         "emotion" => {
             let mut dims = serde_json::Map::new();
             for (k, v) in &plutchik {
@@ -634,15 +699,29 @@ async fn handle_engine_mod(
                 "版本": env!("CARGO_PKG_VERSION"),
             })
         }
-        "memory" => serde_json::json!({
-            "记忆总量": mem_total,
-            "L1 工作记忆": 0,
-            "L2 持久画像": mem_total,
-            "L3 索引层": 0,
-            "RAM 缓存": 0,
-            "存储路径": tremolite_dir.join("data").join("memory").to_string_lossy(),
-            "版本": env!("CARGO_PKG_VERSION"),
-        }),
+        "memory" => {
+            let l1_count = std::fs::read_to_string(memory_dir.join("l1_working.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
+                .unwrap_or(0);
+            let l3_count = std::fs::read_to_string(memory_dir.join("l3_index.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
+                .unwrap_or(0);
+            let ram_count = std::fs::read_to_string(memory_dir.join("ram_fts.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
+                .unwrap_or(0);
+            serde_json::json!({
+                "记忆总量": mem_total,
+                "L1 工作记忆": l1_count,
+                "L2 持久画像": mem_total,
+                "L3 索引层": l3_count,
+                "RAM 缓存": ram_count,
+                "存储路径": memory_dir.to_string_lossy(),
+                "版本": env!("CARGO_PKG_VERSION"),
+            })
+        }
         "attention" => serde_json::json!({
             "上下文窗口": "启用中",
             "焦点指标": "正常",
@@ -650,12 +729,18 @@ async fn handle_engine_mod(
             "注意力策略": "滑动窗口",
             "版本": env!("CARGO_PKG_VERSION"),
         }),
-        "skill" => serde_json::json!({
-            "已注册技能": 0,
-            "能力域": 0,
-            "自动发现": "已启用",
-            "版本": env!("CARGO_PKG_VERSION"),
-        }),
+        "skill" => {
+            let skill_count = std::fs::read_to_string(tremolite_dir.join("data").join("learn").join("skills.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
+                .unwrap_or(0);
+            serde_json::json!({
+                "已注册技能": skill_count,
+                "能力域": 0,
+                "自动发现": "已启用",
+                "版本": env!("CARGO_PKG_VERSION"),
+            })
+        }
         "reflection" => serde_json::json!({
             "反思周期": "3600s",
             "最近反思": "无",
@@ -675,13 +760,37 @@ async fn handle_engine_mod(
             "活跃任务": 0,
             "版本": env!("CARGO_PKG_VERSION"),
         }),
-        "channels" => serde_json::json!({
-            "已注册通道": 2,
-            "通道列表": ["qqbot_test", "webhook"],
-            "端口": 5835,
-            "状态": "运行中（2/2 通道已连接）",
-            "版本": env!("CARGO_PKG_VERSION"),
-        }),
+        "channels" => {
+            let config_str = std::fs::read_to_string(tremolite_dir.join("config.toml")).ok().unwrap_or_default();
+            let mut channel_count = 0u32;
+            let mut channel_names: Vec<String> = Vec::new();
+            let mut dash_port = 5835u16;
+            for line in config_str.lines() {
+                let t = line.trim();
+                if let Some(rest) = t.strip_prefix("[channels.") {
+                    if let Some(end) = rest.find(']') {
+                        channel_count += 1;
+                        channel_names.push(rest[..end].to_string());
+                    }
+                }
+                if let Some(rest) = t.strip_prefix("listen = \"") {
+                    if let Some(end) = rest.find('\"') {
+                        if let Some(p_str) = rest[..end].split(':').last() {
+                            if let Ok(p) = p_str.parse::<u16>() {
+                                dash_port = p;
+                            }
+                        }
+                    }
+                }
+            }
+            serde_json::json!({
+                "已注册通道": channel_count,
+                "通道列表": channel_names,
+                "端口": dash_port,
+                "状态": "运行中",
+                "版本": env!("CARGO_PKG_VERSION"),
+            })
+        }
         "user" => {
             // 读 config.toml 提取 [user] 段的账户信息
             let config_str = std::fs::read_to_string(tremolite_dir.join("config.toml")).ok().unwrap_or_default();
@@ -751,6 +860,56 @@ async fn handle_engine_mod(
         "status": "ok",
         "模块ID": mod_id,
         "data": data,
+    }))
+}
+
+// ─── Handler: 模块开关 ────────────────────
+async fn handle_module_toggle(
+    axum::extract::Path(mod_id): Path<String>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let state_path = std::path::Path::new(&home)
+        .join(".tremolite").join("data").join("tremolite").join("modules_state.json");
+    // 读当前状态
+    let mut states = std::fs::read_to_string(&state_path).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or(serde_json::json!({}));
+    let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+    // 确保是对象
+    if let Some(obj) = states.as_object_mut() {
+        obj.insert(mod_id.clone(), serde_json::json!(enabled));
+    } else {
+        let mut map = serde_json::Map::new();
+        map.insert(mod_id.clone(), serde_json::json!(enabled));
+        states = serde_json::json!(map);
+    }
+    // 写回
+    if let Some(parent) = state_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&state_path, serde_json::to_string_pretty(&states).unwrap_or_default());
+    Json(serde_json::json!({
+        "status": "ok",
+        "模块ID": mod_id,
+        "enabled": enabled,
+    }))
+}
+
+// ─── Handler: 重启透闪石 ──────────────────────────
+// 调整模块开关后，用户点此按钮重启进程使变更生效
+async fn handle_restart() -> Json<serde_json::Value> {
+    // 先回复 success，然后后台等一秒再杀进程（watchdog 会自动拉起）
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let _ = std::process::Command::new("pkill")
+            .arg("-f")
+            .arg("tremolite-cli daemon")
+            .spawn();
+    });
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": "正在重启透闪石……watchdog 会在几秒内重新拉起。",
     }))
 }
 
