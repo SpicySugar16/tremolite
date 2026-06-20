@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -21,6 +22,8 @@ pub struct CronModule {
     running: Arc<AtomicBool>,
     handle: Option<EngineHandle>,
     scheduler_tx: Option<mpsc::Sender<SessionTask>>,
+    /// cron_tasks.json 路径——ticker 每 tick 从这里重载任务
+    json_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -29,6 +32,8 @@ struct CronJobState {
     schedule: Schedule,
     action: JobAction,
     channel: String,
+    /// 可选的任务级投递目标，如 "group:123456" 或 "private:654321"
+    deliver_target: Option<String>,
     next_run: u64,
     run_count: u64,
     enabled: bool,
@@ -47,6 +52,54 @@ fn timestamp() -> u64 {
         .as_secs()
 }
 
+/// 把 "0 30 8 * * *" 或 "0 */30 * * * *" 这类 cron 字符串转成 Schedule
+fn parse_schedule_str(s: &str) -> Schedule {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 5 {
+        // 间隔模式: "0 */N * * * *"
+        if parts.len() >= 6 && parts[0] == "0" && parts[1].starts_with("*/") {
+            let n: u64 = parts[1].trim_start_matches("*/").parse().unwrap_or(30);
+            return Schedule::EverySecs(n * 60);
+        }
+        if parts.len() >= 6 && parts[0] == "0" && parts[1] == "0" && parts[2].starts_with("*/") {
+            let n: u64 = parts[2].trim_start_matches("*/").parse().unwrap_or(1);
+            return Schedule::EverySecs(n * 3600);
+        }
+        // 定时模式: "0 MM HH * * *" -> Daily { hour, minute }
+        if parts.len() >= 6 && parts[3] == "*" && parts[4] == "*" && parts[5] == "*" {
+            let hour: u8 = parts[2].parse().unwrap_or(0);
+            let minute: u8 = parts[1].parse().unwrap_or(0);
+            return Schedule::Daily { hour, minute };
+        }
+    }
+    // 兜底：原始字符串作为 cron 表达式（截 5 字段）
+    let five: String = parts.iter().take(5).cloned().collect::<Vec<_>>().join(" ");
+    Schedule::CronExpr(five)
+}
+
+/// 把 "all" "broadcast" 等归一化为 __all__，否则原样
+/// 注意：处理 "channel:type:id" 格式时只取通道名
+fn normalize_deliver(d: &str) -> &str {
+    match d {
+        "" | "all" | "broadcast" | "everywhere" => "__all__",
+        _ => {
+            // "channel:type:id" → 提取 "channel" 部分
+            if let Some(pos) = d.find(':') {
+                &d[..pos]
+            } else {
+                d
+            }
+        }
+    }
+}
+
+/// 从 "channel:type:id" 格式中提取 ":type:id" 部分作为投递目标
+fn extract_deliver_target(d: &str) -> Option<String> {
+    let pos = d.find(':')?;
+    let rest = &d[pos + 1..];
+    if rest.is_empty() { None } else { Some(rest.to_string()) }
+}
+
 impl CronModule {
     pub fn new() -> Self {
         Self {
@@ -54,12 +107,66 @@ impl CronModule {
             running: Arc::new(AtomicBool::new(false)),
             handle: None,
             scheduler_tx: None,
+            json_path: None,
         }
+    }
+
+    /// 设置 cron_tasks.json 路径
+    pub fn set_json_path(&mut self, path: &str) {
+        self.json_path = Some(PathBuf::from(path));
     }
 
     /// 设置调度器入站通道（由 Engine 在创建调度器后注入）
     pub fn set_scheduler(&mut self, tx: mpsc::Sender<SessionTask>) {
         self.scheduler_tx = Some(tx);
+    }
+
+    /// 从 cron_tasks.json 重载全部任务
+    pub fn load_from_json(&self) {
+        let path = match &self.json_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let entries: Vec<serde_json::Value> = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let mut jobs = self.jobs.lock().unwrap();
+        jobs.clear();
+        let now = timestamp();
+        for entry in &entries {
+            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("未命名");
+            let sched_str = entry.get("schedule").and_then(|v| v.as_str()).unwrap_or("");
+            let sched = parse_schedule_str(sched_str);
+            let cmd = entry.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let channel_raw = entry.get("deliver").and_then(|v| v.as_str()).unwrap_or("origin");
+            let channel = normalize_deliver(channel_raw);
+            let deliver_target = extract_deliver_target(channel_raw);
+            let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+            let next_run = calc_next_run_at(&sched, now);
+            // 兼容旧字段：有 command 就用 shell action，否则当 prompt
+            let contains_prompt = entry.get("type").and_then(|v| v.as_str()) == Some("prompt");
+            let action = if contains_prompt {
+                JobAction::Prompt(cmd.to_string())
+            } else {
+                JobAction::Shell(cmd.to_string())
+            };
+            jobs.push(CronJobState {
+                name: name.to_string(),
+                schedule: sched,
+                action,
+                channel: channel.to_string(),
+                deliver_target,
+                next_run,
+                run_count: 0,
+                enabled,
+            });
+        }
+        tracing::info!("cron: loaded {} tasks from json", jobs.len());
     }
 
     /// 注册一个定时 prompt 任务
@@ -72,6 +179,7 @@ impl CronModule {
             schedule,
             action: JobAction::Prompt(prompt.to_string()),
             channel: channel.to_string(),
+            deliver_target: None,
             next_run,
             run_count: 0,
             enabled: true,
@@ -89,6 +197,7 @@ impl CronModule {
             schedule,
             action: JobAction::Shell(command.to_string()),
             channel: channel.to_string(),
+            deliver_target: None,
             next_run,
             run_count: 0,
             enabled: true,
@@ -127,24 +236,68 @@ impl CronModule {
             None => return,
         };
 
+        // 挂 json 路径的拷贝
+        let json_path = self.json_path.clone();
+
         thread::spawn(move || {
+            let json_path = json_path;
             while running.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_secs(5));
+
+                // 每 tick 从 json 重载——确保 API 新建的任务被拾取
+                if let Some(ref path) = json_path {
+                    let content = std::fs::read_to_string(path).ok();
+                    if let Some(c) = content {
+                        if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&c) {
+                            if let Ok(mut jl) = jobs.lock() {
+                                jl.clear();
+                                let now = timestamp();
+                                for entry in &entries {
+                                    let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("未命名");
+                                    let sched_str = entry.get("schedule").and_then(|v| v.as_str()).unwrap_or("");
+                                    let sched = parse_schedule_str(sched_str);
+                                    let cmd = entry.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                    let channel_raw = entry.get("deliver").and_then(|v| v.as_str()).unwrap_or("origin");
+                                    let channel = normalize_deliver(channel_raw);
+                                    let deliver_target = extract_deliver_target(channel_raw);
+                                    let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                                    let next_run = calc_next_run_at(&sched, now);
+                                    let action = JobAction::Shell(cmd.to_string());
+                                    jl.push(CronJobState {
+                                        name: name.to_string(),
+                                        schedule: sched,
+                                        action,
+                                        channel: channel.to_string(),
+                                        deliver_target,
+                                        next_run,
+                                        run_count: 0,
+                                        enabled,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let now = timestamp();
-                let mut to_fire: Vec<(String, JobAction, String)> = Vec::new();
+                let mut to_fire: Vec<(String, JobAction, String, String)> = Vec::new();
 
                 if let Ok(mut jl) = jobs.lock() {
                     for job in jl.iter_mut() {
                         if !job.enabled || job.next_run > now {
                             continue;
                         }
-                        to_fire.push((job.name.clone(), job.action.clone(), job.channel.clone()));
+                        let sender = match &job.deliver_target {
+                            Some(t) => t.clone(),
+                            None => format!("cron-{}", job.name),
+                        };
+                        to_fire.push((job.name.clone(), job.action.clone(), job.channel.clone(), sender));
                         job.run_count += 1;
                         job.next_run = calc_next_run_at(&job.schedule, now);
                     }
                 }
 
-                for (name, action, channel) in to_fire {
+                for (name, action, channel, sender) in to_fire {
                     match action {
                         JobAction::Prompt(prompt) => {
                             let _ = tx.send(SessionTask {
@@ -200,7 +353,11 @@ impl Module for CronModule {
         vec!["cron.schedule".into(), "cron.list".into()]
     }
     fn requires(&self) -> Vec<Capability> {
-        vec![]
+        vec!["channels.qqbot".into(), "channels.napcat".into(), "channels.http".into()]
+    }
+
+    fn required_modules(&self) -> Vec<&str> {
+        vec!["channels"]
     }
 
     fn tool_definitions(&self) -> Vec<ToolDefinition> {

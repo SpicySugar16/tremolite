@@ -90,6 +90,7 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 <body>
 <div class="topbar">
   <h1>✦ 透闪石</h1>
+  <span class="badge" id="versionBadge">{{VERSION}}</span>
   <span class="badge" id="statusBadge">connecting</span>
   <span class="sub" id="uptimeDisplay"></span>
   <button class="btn sm" onclick="location.reload()" style="font-size:0.7rem">↻</button>
@@ -294,7 +295,8 @@ async function renderEmotion(el){
   html+='<div style="display:flex;align-items:center;gap:12px;margin-top:4px">'+
     '<button class="btn" onclick="refreshEmotion()">↻ 刷新</button>'+
     '<button class="btn accent" onclick="fluctuateEmotion()">🌊 立即情绪波动</button>'+
-    '<span style="margin-left:auto;color:var(--fg3);font-size:0.72rem">情绪引擎 v'+esc(version)+'</span></div>';
+    '<span style="margin-left:auto;color:var(--fg3);font-size:0.72rem">情绪引擎 v'+esc(version)+'</span></div>'+
+    '</div>';
   el.innerHTML=html;
 }
 
@@ -410,6 +412,263 @@ window.sendMessage=async function(){
     el.innerHTML+='<div class="chat-entry"><span class="sender" style="color:var(--red)">系统</span><div class="text" style="color:var(--red)">发送失败</div></div>';
   }
   el.scrollTop=el.scrollHeight;
+};
+
+// ─── Cron 模块页面 ──────────────────────
+function renderCronPage(el,data){
+  if(!data){el.innerHTML='<div class="card"><div class="loading">暂无数据</div></div>';return;}
+  const tasks=data['任务列表']||[];
+  const total=data['任务总数']||0;
+  const active=data['活跃任务']||0;
+  const ver=data['版本']||'?';
+  let html='<div class="grid-2"><div class="card"><div class="card-hd"><h3>⏰ 定时任务</h3></div>'+
+    '<div class="row"><span class="l">模块ID</span><span class="v">cron</span></div>'+
+    '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">运行中</span></span></div>'+
+    '<div class="row"><span class="l">任务总数</span><span class="v">'+total+'</span></div>'+
+    '<div class="row"><span class="l">活跃任务</span><span class="v">'+active+'</span></div></div>'+
+    '<div class="card"><div class="card-hd"><h3>📋 管理</h3></div>'+
+    '<div style="font-size:0.78rem;color:var(--fg2);line-height:1.6">在这里管理定时任务。每个任务使用 cron 表达式设置触发时间，由后台 cron 模块到期执行。</div></div></div>';
+  // 任务列表
+  html+='<div class="card" id="cronTaskSection"><div class="card-hd"><h3>📋 任务列表</h3><button class="btn sm accent" onclick="showCronAdd()">+ 添加</button></div>';
+  if(!tasks.length){
+    html+='<div class="loading" style="padding:12px">暂无任务。点「+ 添加」创建一个~</div>';
+  }else{
+    html+='<table class="hist-table"><thead><tr><th>#</th><th>名称</th><th>内容</th><th>Cron</th><th>投递</th><th>状态</th><th>上次</th><th>操作</th></tr></thead><tbody>';
+    for(let i=0;i<tasks.length;i++){
+      const t=tasks[i];
+      const st=t.enabled?'<span style="color:var(--green)">🟢 启用</span>':'<span style="color:var(--fg3)">🔴 暂停</span>';
+      const lr=t.last_run&&t.last_run!==0?new Date(t.last_run*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'—';
+      const cmd=esc(t.command||t.content||'').substring(0,40);
+      const dv=esc(t.deliver||'origin');
+      html+='<tr><td>'+(i+1)+'</td><td>'+esc(t.name||'')+'</td><td style="font-size:0.72rem;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+cmd+'">'+cmd+'</td><td style="font-family:var(--mono);font-size:0.7rem">'+esc(t.schedule||'')+'</td><td style="font-size:0.72rem;color:var(--fg3)">'+dv+'</td><td>'+st+'</td><td>'+lr+'</td>'+
+        '<td style="display:flex;gap:3px;justify-content:center">'+
+        '<button class="btn sm" onclick="apiPost(\'/dashboard/cron/'+i+'/toggle\').then(()=>reloadCron())" title="切换">'+(t.enabled?'⏸':'▶')+'</button>'+
+        '<button class="btn sm" onclick="showCronEdit('+i+')" title="修改">✏️</button>'+
+        '<button class="btn sm" onclick="if(confirm(\'删除?\'))apiPost(\'/dashboard/cron/'+i+'/delete\').then(()=>reloadCron())" title="删除" style="color:var(--red)">✕</button>'+
+        '</td></tr>';
+    }
+    html+='</tbody></table>';
+  }
+  html+='</div>'+
+    '<div style="text-align:right;color:var(--fg3);font-size:0.72rem;padding:4px 0 10px 0">cron 模块 v'+esc(ver)+'</div>'+
+    '<div id="cronAddDlg" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center">'+
+    '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;width:380px;max-width:90%">'+
+    '<h3 style="color:var(--accent);margin-bottom:12px"><span id="cronDlgTitle">新建定时任务</span></h3>'+
+    '<input id="cronEditIdx" type="hidden" value="-1">'+
+    '<div style="margin-bottom:10px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">名称</label>'+
+    '<input id="cronName" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：半小时波动">'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">执行方式</label>'+
+    '<div style="display:flex;gap:6px;margin-bottom:6px">'+
+    '<button id="cronModeTimed" class="btn sm accent" onclick="switchCronMode(\'timed\')" style="flex:1">⏰ 定时执行</button>'+
+    '<button id="cronModeInterval" class="btn sm" onclick="switchCronMode(\'interval\')" style="flex:1">🔄 间隔执行</button></div>'+
+    // 定时模式
+    '<div id="cronTimedPanel">'+
+    '<div style="display:flex;gap:8px;align-items:center">'+
+    '<label style="color:var(--fg2);font-size:0.78rem">每天</label>'+
+    '<select id="cronHour" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 6px;color:var(--fg);font-size:0.85rem;outline:none">'+
+    (function(){var s='';for(var h=0;h<24;h++){var p=String(h).padStart(2,'0');s+='<option value="'+h+'">'+p+'</option>';}return s;})()+
+    '</select><span style="color:var(--fg2);font-size:0.78rem">:</span>'+
+    '<select id="cronMinute" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 6px;color:var(--fg);font-size:0.85rem;outline:none">'+
+    (function(){var s='';for(var m=0;m<60;m++){var p=String(m).padStart(2,'0');s+='<option value="'+m+'">'+p+'</option>';}return s;})()+
+    '</select><span style="color:var(--fg2);font-size:0.78rem">执行</span></div></div>'+
+    // 间隔模式（默认隐藏）
+    '<div id="cronIntervalPanel" style="display:none">'+
+    '<div style="display:flex;gap:8px;align-items:center">'+
+    '<label style="color:var(--fg2);font-size:0.78rem">每隔</label>'+
+    '<input id="cronIntervalNum" type="number" min="1" max="999" value="30" style="width:60px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 6px;color:var(--fg);font-size:0.85rem;outline:none;text-align:center">'+
+    '<select id="cronIntervalUnit" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 6px;color:var(--fg);font-size:0.85rem;outline:none">'+
+    '<option value="min" selected>分钟</option><option value="hour">小时</option></select>'+
+    '</div></div>'+
+    '<div id="cronPreview" style="margin-top:6px;padding:4px 8px;background:var(--bg3);border-radius:var(--radius-sm);font-family:var(--mono);font-size:0.72rem;color:var(--accent)"></div>'+
+    '<input id="cronSched" type="hidden" value="0 */30 * * * *">'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">任务内容</label>'+
+    '<textarea id="cronCmd" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;outline:none;resize:vertical;min-height:60px;font-family:var(--mono)" placeholder="要执行的命令或消息内容"></textarea>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">投递到</label>'+
+    '<select id="cronDeliver" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none">'+
+    '</select>'+
+    '<div id="cronDeliverTargetWrap" style="display:none;margin-top:4px">'+
+    '<select id="cronDeliverTarget" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none">'+
+    '<option value="">使用通道默认目标</option>'+
+    '</select></div>'+
+    '<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">需依赖消息通道模块</div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">'+
+    '<button class="btn" onclick="document.getElementById(\'cronAddDlg\').style.display=\'none\'">取消</button>'+
+    '<button class="btn accent" onclick="doAddCron()">创建</button></div></div>';
+  el.innerHTML=html;
+  // 加载投递选项
+  loadChannels();
+  // 初始化 cron 傻瓜适配
+  updateCronPreview();
+  ['cronHour','cronMinute','cronIntervalNum','cronIntervalUnit'].forEach(id=>{
+    const el2=document.getElementById(id);
+    if(el2)el2.addEventListener('change',updateCronPreview);
+  });
+}
+window.switchCronMode=function(m){
+  const t=document.getElementById('cronTimedPanel');
+  const i=document.getElementById('cronIntervalPanel');
+  const tb=document.getElementById('cronModeTimed');
+  const ib=document.getElementById('cronModeInterval');
+  if(!t||!i||!tb||!ib)return;
+  if(m==='timed'){
+    t.style.display='';i.style.display='none';
+    tb.className='btn sm accent';ib.className='btn sm';
+  }else{
+    t.style.display='none';i.style.display='';
+    tb.className='btn sm';ib.className='btn sm accent';
+  }
+  updateCronPreview();
+};
+window.updateCronPreview=function(){
+  const t=document.getElementById('cronTimedPanel');
+  const i=document.getElementById('cronIntervalPanel');
+  const pre=document.getElementById('cronPreview');
+  const hidden=document.getElementById('cronSched');
+  if(!pre||!hidden)return;
+  let cron='',label='';
+  if(t&&t.style.display!=='none'){
+    // 定时模式
+    const h=parseInt(document.getElementById('cronHour')?.value||'0');
+    const m=parseInt(document.getElementById('cronMinute')?.value||'0');
+    cron='0 '+m+' '+h+' * * *';
+    label='每天 '+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+' 执行';
+  }else if(i&&i.style.display!=='none'){
+    // 间隔模式
+    const n=parseInt(document.getElementById('cronIntervalNum')?.value||'30');
+    const u=document.getElementById('cronIntervalUnit')?.value||'min';
+    if(u==='min'){
+      cron='0 */'+Math.max(1,n)+' * * * *';
+      label='每隔 '+n+' 分钟执行一次';
+    }else{
+      cron='0 0 */'+Math.max(1,n)+' * * *';
+      label='每隔 '+n+' 小时执行一次';
+    }
+  }
+  hidden.value=cron;
+  pre.textContent='📋 '+label+'  →  '+cron;
+};
+// ── 投递目标选择（数据由 Rust 服务端提供）──
+window.loadChannels=async function(){
+    const r=await api('/dashboard/cron/targets');
+    if(!r||r.status!=='ok')return;
+    const opts=r.options||[];
+    // 存到全局，供 showCronAdd 和 onchange 使用
+    window._cronDeliverOpts = opts;
+    const sel=document.getElementById('cronDeliver');
+    if(!sel)return;
+    const current=sel.value;
+    sel.innerHTML='';
+    for(const o of opts){
+        const el=document.createElement('option');
+        el.value=o.value;
+        const tc=o.targets&&o.targets.length?(' — '+o.targets.length+' 个目标'):'';
+        el.textContent=o.label+tc;
+        sel.appendChild(el);
+    }
+    if(current)sel.value=current;
+    sel.onchange=function(){updateDeliverTarget(window._cronDeliverOpts);};
+    updateDeliverTarget(window._cronDeliverOpts);
+};
+window.updateDeliverTarget=function(opts){
+  const wrap=document.getElementById('cronDeliverTargetWrap');
+  const tsel=document.getElementById('cronDeliverTarget');
+  const dv=document.getElementById('cronDeliver').value;
+  if(!wrap||!tsel)return;
+  // 找到当前选中选项
+  const cur=opts.find(o=>o.value===dv);
+  const targets=cur&&cur.targets?cur.targets:[];
+  if(!targets.length){
+    wrap.style.display='none';
+    return;
+  }
+  tsel.innerHTML='<option value="">使用通道默认目标</option>';
+  for(const t of targets){
+    const opt=document.createElement('option');
+    opt.value=t;
+    opt.textContent=t;
+    tsel.appendChild(opt);
+  }
+  wrap.style.display='block';
+};
+
+window.showCronAdd=function(){
+  document.getElementById('cronEditIdx').value='-1';
+  document.getElementById('cronDlgTitle').textContent='新建定时任务';
+  document.getElementById('cronName').value='';
+  document.getElementById('cronCmd').value='';
+  document.getElementById('cronDeliver').value='origin';
+  document.getElementById('cronHour').value='0';
+  document.getElementById('cronMinute').value='0';
+  document.getElementById('cronIntervalNum').value='30';
+  document.getElementById('cronIntervalUnit').value='min';
+  switchCronMode('timed');
+  // 刷新子目标选择框状态
+  if(window._cronDeliverOpts) updateDeliverTarget(window._cronDeliverOpts);
+  const d=document.getElementById('cronAddDlg');
+  if(d)d.style.display='flex';
+};
+window.showCronEdit=async function(idx){
+  // 获取当前任务数据
+  const r=await api('/dashboard/engine/cron');
+  if(!r||r.status!=='ok')return;
+  const tasks=r.data['任务列表']||[];
+  const t=tasks[idx];
+  if(!t)return;
+  document.getElementById('cronEditIdx').value=String(idx);
+  document.getElementById('cronDlgTitle').textContent='修改定时任务';
+  document.getElementById('cronName').value=t.name||'';
+  document.getElementById('cronCmd').value=t.command||t.content||'';
+  document.getElementById('cronDeliver').value=t.deliver||'origin';
+  // 尝试从cron表达式反推模式
+  const sched=t.schedule||'';
+  if(sched.match(/^\d+ \*\/\d+/)){
+    // 间隔模式
+    const parts=sched.split(' ');
+    if(parts[1]&&parts[1].startsWith('*/')){
+      document.getElementById('cronIntervalNum').value=parts[1].slice(2);
+      document.getElementById('cronIntervalUnit').value=sched.startsWith('0 0 */')?'hour':'min';
+      switchCronMode('interval');
+    }
+  }else{
+    // 定时模式
+    const parts=sched.split(' ');
+    if(parts.length>=3){
+      document.getElementById('cronHour').value=parts[2]||'0';
+      document.getElementById('cronMinute').value=parts[1]||'0';
+    }
+    switchCronMode('timed');
+  }
+  updateCronPreview();
+  const d=document.getElementById('cronAddDlg');
+  if(d)d.style.display='flex';
+};
+window.doAddCron=async function(){
+  const idx=parseInt(document.getElementById('cronEditIdx').value||'-1');
+  const n=document.getElementById('cronName').value.trim()||'未命名';
+  const c=document.getElementById('cronSched').value||'0 */30 * * * *';
+  const cmd=document.getElementById('cronCmd').value.trim()||'';
+  const dv_raw=document.getElementById('cronDeliver').value.trim()||'origin';
+  const dt=document.getElementById('cronDeliverTarget');
+  const target=dt&&dt.value?':'+dt.value:'';
+  const dv=dv_raw+target;
+  if(idx>=0){
+    // 编辑模式
+    await apiPost('/dashboard/cron/'+idx+'/update',{name:n,schedule:c,command:cmd,deliver:dv});
+  }else{
+    // 新建模式
+    await apiPost('/dashboard/cron/create',{name:n,schedule:c,command:cmd,deliver:dv});
+  }
+  document.getElementById('cronAddDlg').style.display='none';
+  reloadCron();
+};
+window.reloadCron=async function(){
+  const el=document.getElementById('pageContent');
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  try{
+    const d=await api('/dashboard/engine/cron');
+    if(d.status==='ok')renderCronPage(el,d.data);
+    else el.innerHTML='<div class="error">加载失败</div>';
+  }catch(e){el.innerHTML='<div class="error">网络错误</div>';}
 };
 
 // ─── Sessions Page ────
@@ -599,6 +858,10 @@ async function renderModule(el,modId,statusData){
         // 情绪引擎专属页面 — 复用 renderEmotion
         renderEmotion(el);
         return;
+      }else if(modId==='cron'){
+        // 定时任务页面 — 用 engine 数据渲染
+        renderCronPage(el,d.data);
+        return;
       }else{
       for(const [k,v] of Object.entries(d)){
         if(k==='status')continue;
@@ -729,7 +992,6 @@ function saveModuleOrder(){
   const names=Array.from(sb.querySelectorAll('.nav-item[draggable]')).map(el=>el.dataset.name);
   try{localStorage.setItem('tremolite_mod_order',JSON.stringify(names))}catch(e){}
 }
-// ─── Init ────
 function init(){
   // Read hash routing
   if(location.hash){

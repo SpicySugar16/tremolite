@@ -62,6 +62,7 @@ pub struct ParsedCommand {
     pub log_level: String,
     pub session_id: String,
     pub gateway_url: String,
+    pub profile_name: String,
 }
 
 /// 显示帮助文本
@@ -122,6 +123,7 @@ pub fn parse_args() -> ParsedCommand {
     let gateway_url = parse_opt_string(&args, &["--gateway-url"]).unwrap_or_else(|| "http://localhost:8080".into());
     let port = parse_opt_uint(&args, &["--port"]).unwrap_or(5835u16);
     let dashboard_port = parse_opt_uint(&args, &["--dashboard-port"]).unwrap_or(5835u16);
+    let profile_name = parse_opt_string(&args, &["--profile"]).unwrap_or_else(|| "main".into());
 
     // 找第一个非 flag 的参数作为子命令
     let subcmd_name = args.iter()
@@ -158,7 +160,7 @@ pub fn parse_args() -> ParsedCommand {
         }
     };
 
-    ParsedCommand { subcommand, config_path, log_level, session_id, gateway_url }
+    ParsedCommand { subcommand, config_path, log_level, session_id, gateway_url, profile_name }
 }
 
 /// 解析子命令的子动作（如 `tremolite plan list` 中的 "list"）

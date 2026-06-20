@@ -8,6 +8,9 @@ use tremolite_llm::{
     ToolCallLoop, ToolCallRecord, ToolExecutor,
 };
 
+/// 核心引擎版本号 — 编译时从 Cargo.toml 注入
+pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod gateway;
 pub mod module;
 // 模块实现（内部使用，外部通过独立 crate 访问）
@@ -262,11 +265,20 @@ impl ToolExecutor for CompositeToolExecutor {
 
     fn list_tools(&self) -> Vec<ToolDefinition> {
         let mut tools = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         // 旧执行器工具
-        tools.extend(self.fallback.list_tools());
+        for tool in self.fallback.list_tools() {
+            if seen.insert(tool.function.name.clone()) {
+                tools.push(tool);
+            }
+        }
         // 模块工具
         for (_mod_id, def) in self.modules.collect_tools() {
-            tools.push(def);
+            if seen.insert(def.function.name.clone()) {
+                tools.push(def);
+            } else {
+                tracing::warn!("duplicate tool '{}' from module '{}'", def.function.name, _mod_id);
+            }
         }
         tools
     }

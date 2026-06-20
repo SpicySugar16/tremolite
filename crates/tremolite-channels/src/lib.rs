@@ -112,6 +112,10 @@ pub struct QqBotChannel {
     /// 从 OAuth2 获取的 access_token（运行时动态刷新）
     access_token: tokio::sync::Mutex<Option<(String, std::time::Instant)>>,
     shutdown_tx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// 广播默认投递目标，如 "private:2513924725"
+    broadcast_target: Option<String>,
+    /// 从接收消息中自动收集的已知可投递目标
+    seen_targets: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl QqBotChannel {
@@ -129,7 +133,15 @@ impl QqBotChannel {
             production,
             access_token: tokio::sync::Mutex::new(None),
             shutdown_tx: tokio::sync::Mutex::new(None),
+            broadcast_target: None,
+            seen_targets: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// 设置广播默认投递目标
+    pub fn with_broadcast_target(mut self, target: Option<String>) -> Self {
+        self.broadcast_target = target;
+        self
     }
 
     fn api_base(&self) -> &str {
@@ -223,6 +235,7 @@ impl Channel for QqBotChannel {
         let app_id = self.app_id.clone();
         let client_secret = self.client_secret.clone();
         let api_base = self.api_base().to_string();
+        let seen_targets = self.seen_targets.clone();
 
         tokio::spawn(async move {
             // 用 tokio::pin! 固定 shutdown_rx 以便在循环中重复使用
@@ -239,7 +252,7 @@ impl Channel for QqBotChannel {
                         return;
                     }
                     result = run_qqbot_connection(
-                        &name, &app_id, &client_secret, &api_base, &sender, &mut cached_token
+                        &name, &app_id, &client_secret, &api_base, &sender, &mut cached_token, &seen_targets
                     ) => {
                         if let Err(e) = result {
                             tracing::error!("channel '{}': connection error: {}", name, e);
@@ -255,8 +268,25 @@ impl Channel for QqBotChannel {
     }
 
     async fn send(&self, msg: &OutboundMessage) -> Result<(), String> {
+        // 广播/无效目标时回退到配置的广播目标
+        let effective_target = if msg.target == "broadcast" || !msg.target.contains(':') {
+            match &self.broadcast_target {
+                Some(t) => {
+                    tracing::debug!("channel '{}': falling back to broadcast_target for target '{}'", self.name, msg.target);
+                    t.as_str()
+                }
+                None if msg.target.contains(':') => &msg.target,
+                None => {
+                    tracing::warn!("channel '{}': cannot send to '{}', no broadcast_target configured", self.name, msg.target);
+                    return Ok(());
+                }
+            }
+        } else {
+            &msg.target
+        };
+
         // target 格式："group:group_openid" 或 "private:user_openid"
-        let parts: Vec<&str> = msg.target.splitn(2, ':').collect();
+        let parts: Vec<&str> = effective_target.splitn(2, ':').collect();
         if parts.len() != 2 {
             return Err(format!(
                 "QqBotChannel: invalid target '{}', expected 'group:openid' or 'private:openid'",
@@ -310,6 +340,10 @@ impl Channel for QqBotChannel {
         }
         Ok(())
     }
+
+    fn known_targets(&self) -> Vec<String> {
+        self.seen_targets.lock().map(|t| t.clone()).unwrap_or_default()
+    }
 }
 
 // ─── WebSocket 连接管理 ────────────────────────────
@@ -321,6 +355,7 @@ async fn run_qqbot_connection(
     api_base: &str,
     sender: &mpsc::Sender<InboundMessage>,
     cached_token: &mut Option<(String, std::time::Instant)>,
+    seen_targets: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 ) -> Result<(), String> {
     // 1. 获取/刷新 OAuth2 access_token
     let access_token = get_or_refresh_token(cached_token, app_id, client_secret).await?;
@@ -450,6 +485,14 @@ async fn run_qqbot_connection(
                                             } else {
                                                 format!("private:{}", data.author.id)
                                             };
+
+                                            // 记录已知可投递目标
+                                            if let Ok(mut targets) = seen_targets.lock() {
+                                                if !targets.contains(&target) {
+                                                    targets.push(target.clone());
+                                                    tracing::debug!("channel '{}': new target recorded: {}", name, target);
+                                                }
+                                            }
 
                                             let mut msg = InboundMessage::new(
                                                 &data.content,
@@ -643,6 +686,10 @@ pub struct NapCatChannel {
     sender_mutex: tokio::sync::Mutex<Option<mpsc::Sender<InboundMessage>>>,
     /// 关闭信号
     shutdown_tx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// 广播默认投递目标，如 "group:123456"
+    broadcast_target: Option<String>,
+    /// 从接收消息中自动收集的已知可投递目标
+    seen_targets: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl NapCatChannel {
@@ -665,7 +712,15 @@ impl NapCatChannel {
             http_base,
             sender_mutex: tokio::sync::Mutex::new(None),
             shutdown_tx: tokio::sync::Mutex::new(None),
+            broadcast_target: None,
+            seen_targets: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    /// 设置广播默认投递目标
+    pub fn with_broadcast_target(mut self, target: Option<String>) -> Self {
+        self.broadcast_target = target;
+        self
     }
 }
 
@@ -684,6 +739,7 @@ impl Channel for NapCatChannel {
         let name = self.name.clone();
         let ws_url = self.ws_url.clone();
         let http_base = self.http_base.clone();
+        let seen_targets = self.seen_targets.clone();
 
         // 后台任务：连接 NapCat WS 并持续接收事件
         tokio::spawn(async move {
@@ -707,7 +763,7 @@ impl Channel for NapCatChannel {
                                 msg = read.next() => {
                                     match msg {
                                         Some(Ok(Message::Text(text))) => {
-                                            if let Err(e) = handle_event(&sender, &text, &name, &http_base).await {
+                                            if let Err(e) = handle_event(&sender, &text, &name, &http_base, &seen_targets).await {
                                                 tracing::warn!("channel '{}': event handling error: {}", name, e);
                                             }
                                         }
@@ -752,8 +808,25 @@ impl Channel for NapCatChannel {
     }
 
     async fn send(&self, msg: &OutboundMessage) -> Result<(), String> {
+        // 广播/无效目标时回退到配置的广播目标
+        let effective_target = if msg.target == "broadcast" || !msg.target.contains(':') {
+            match &self.broadcast_target {
+                Some(t) => {
+                    tracing::debug!("channel '{}': falling back to broadcast_target for target '{}'", self.name, msg.target);
+                    t.as_str()
+                }
+                None if msg.target.contains(':') => &msg.target,
+                None => {
+                    tracing::warn!("channel '{}': cannot send to '{}', no broadcast_target configured", self.name, msg.target);
+                    return Ok(());
+                }
+            }
+        } else {
+            &msg.target
+        };
+
         // target 格式："group:123456" 或 "private:654321"
-        let parts: Vec<&str> = msg.target.splitn(2, ':').collect();
+        let parts: Vec<&str> = effective_target.splitn(2, ':').collect();
         if parts.len() != 2 {
             return Err(format!(
                 "NapCatChannel: invalid target '{}', expected 'group:id' or 'private:id'",
@@ -831,6 +904,10 @@ impl Channel for NapCatChannel {
         }
         Ok(())
     }
+
+    fn known_targets(&self) -> Vec<String> {
+        self.seen_targets.lock().map(|t| t.clone()).unwrap_or_default()
+    }
 }
 
 // ─── 事件处理 ──────────────────────────────────────
@@ -841,6 +918,7 @@ async fn handle_event(
     text: &str,
     _channel_name: &str,
     _http_base: &str,
+    seen_targets: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 ) -> Result<(), String> {
     let event: OneBotEvent = serde_json::from_str(text)
         .map_err(|e| format!("failed to parse OneBot event: {}", e))?;
@@ -857,18 +935,26 @@ async fn handle_event(
     }
 
     // 构造 channel + target 标识
-    let (channel_detail, sender_id) = match event.message_type.as_str() {
+    let (channel_detail, sender_id, event_target) = match event.message_type.as_str() {
         "group" => {
             let gid = event.group_id.unwrap_or(0);
             let uid = event.user_id.unwrap_or(0);
-            (format!("napcat.group.{}", gid), uid.to_string())
+            (format!("napcat.group.{}", gid), uid.to_string(), format!("group:{}", gid))
         }
         "private" => {
             let uid = event.user_id.unwrap_or(0);
-            (format!("napcat.private.{}", uid), uid.to_string())
+            (format!("napcat.private.{}", uid), uid.to_string(), format!("private:{}", uid))
         }
         _ => return Ok(()),
     };
+
+    // 记录已知目标
+    if let Ok(mut targets) = seen_targets.lock() {
+        if !targets.contains(&event_target) {
+            targets.push(event_target);
+            tracing::debug!("channel '{}': new target recorded", _channel_name);
+        }
+    }
 
     let nickname = event
         .sender
@@ -1164,7 +1250,12 @@ impl ChannelsModule {
                         );
                         let result = rt.block_on(async {
                             let registry = reg.lock().await;
-                            registry.send(&msg).await
+                            if msg.channel == "__all__" {
+                                registry.send_all(&msg).await;
+                                Ok(())
+                            } else {
+                                registry.send(&msg).await
+                            }
                         });
                         if let Err(e) = result {
                             tracing::error!("bridge: outbound send error: {}", e);
@@ -1179,7 +1270,12 @@ impl ChannelsModule {
                 while let Ok(msg) = tool_rx.try_recv() {
                     let result = rt.block_on(async {
                         let registry = reg.lock().await;
-                        registry.send(&msg).await
+                        if msg.channel == "__all__" {
+                            registry.send_all(&msg).await;
+                            Ok(())
+                        } else {
+                            registry.send(&msg).await
+                        }
                     });
                     if let Err(e) = result {
                         tracing::error!("bridge: tool outbound error: {}", e);
@@ -1191,6 +1287,11 @@ impl ChannelsModule {
 
         self.bridged = true;
         tracing::info!("channels: bridged to scheduler");
+    }
+
+    /// 获取桥接后的通道注册表共享引用（用于 Dashboard 查询已知目标）
+    pub fn channel_registry(&self) -> Option<Arc<TokioMutex<ChannelRegistry>>> {
+        self.bridge_registry.clone()
     }
 }
 
@@ -1211,7 +1312,7 @@ impl Module for ChannelsModule {
     }
 
     fn version(&self) -> &str {
-        "0.1.0"
+        "0.2.0"
     }
 
     fn provides(&self) -> Vec<Capability> {

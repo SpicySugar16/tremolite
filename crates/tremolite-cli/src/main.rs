@@ -12,6 +12,7 @@ use tremolite_config::Config;
 use tremolite_dashboard::DashboardModule;
 use tremolite_reflection::ReflectionModule;
 use tremolite_server::{initialize_channels, run_server};
+use tremolite_channels::ChannelRegistry;
 
 mod cli;
 mod tui;
@@ -204,9 +205,7 @@ fn main() {
     let _ = engine.register_module(Box::new(tools_module));
     println!("  Tools registered: {} ✓", tool_count);
 
-    if matches!(parsed.subcommand, cli::Subcommand::Dashboard { .. }) {
-        let _ = engine.register_module(Box::new(DashboardModule::new()));
-    }
+    let _ = engine.register_module(Box::new(DashboardModule::new()));
 
     let _ = engine.register_module(Box::new(MemoryModule::new(d.clone())));
     let _ = engine.register_module(Box::new(SessionModule::new(1800)));
@@ -224,7 +223,20 @@ fn main() {
     let _ = engine.register_module(Box::new(ReflectionModule::new(5)));
     let _ = engine.register_module(Box::new(CompressModule::new()));
     let _ = engine.register_module(Box::new(DelegationModule::new()));
+    let _ = engine.register_module(Box::new(ChannelsModule::new()));
     let _ = engine.register_module(Box::new(CronModule::new()));
+
+    // 注入 cron_tasks.json 路径——让 CronModule 每 tick 从 API 写的文件加载
+    {
+        let cron_json = profile_dir.join("cron_tasks.json").to_string_lossy().to_string();
+        let _ = engine.modules.with_module_mut("cron", |m| {
+            if let Some(cm) = m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::CronModule>())
+            {
+                cm.set_json_path(&cron_json);
+            }
+        });
+    }
 
     // MCP 模块
     {
@@ -366,6 +378,7 @@ fn main() {
             println!("  Creating session scheduler...");
             let (inbound_tx, outbound_rx, pending_results) = engine.create_scheduler();
             let chat_tx = inbound_tx.clone();
+            let mut channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>> = None;
 
             if has_channels {
                 if let Some(ref cfg) = config {
@@ -380,15 +393,16 @@ fn main() {
                     // 桥接通道模块到调度器
                     println!("  Bridging channels to scheduler...");
                     channels_module.bridge_to_scheduler(inbound_tx, outbound_rx);
+                    channel_registry = channels_module.channel_registry();
                     let _ = engine.register_module(Box::new(channels_module));
                 }
             } else {
                 println!("  No channels configured, running in API-only mode");
             }
 
-            // 启动 HTTP 服务——所有端点通过调度器处理消息
+            // 启动 HTTP 服务
             println!("  Starting HTTP daemon on http://{addr}");
-            if let Err(e) = rt.block_on(run_server(chat_tx, pending_results, &addr)) {
+            if let Err(e) = rt.block_on(run_server(chat_tx, pending_results, &addr, &parsed.profile_name, channel_registry)) {
                 eprintln!("  Server error: {e}");
             }
         }

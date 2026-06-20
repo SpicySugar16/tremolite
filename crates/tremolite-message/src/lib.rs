@@ -95,6 +95,10 @@ pub trait Channel: Send + Sync {
 
     /// 关闭通道
     async fn stop(&self) -> Result<(), String>;
+
+    /// 通道已知的可投递目标列表（来自接收到的消息）
+    /// 用于 Dashboard 让用户选择投递到哪个群/私聊
+    fn known_targets(&self) -> Vec<String> { vec![] }
 }
 
 // ─── ChannelRegistry ───────────────────────────────
@@ -156,6 +160,18 @@ impl ChannelRegistry {
         }
     }
 
+    /// 向所有已注册通道发送相同消息（每个通道的 channel 字段自动替换）
+    /// 用于 cron "投递给全部" 场景
+    pub async fn send_all(&self, msg: &OutboundMessage) {
+        for (name, channel) in &self.channels {
+            // 用 "broadcast" 作标记——各通道实现里用 broadcast_target 替换
+            let per_channel = OutboundMessage::new(&msg.content, name, "broadcast");
+            if let Err(e) = channel.send(&per_channel).await {
+                tracing::warn!("channel '{}': send_all failed: {}", name, e);
+            }
+        }
+    }
+
     /// 广播给所有通道（排除来源通道）
     pub async fn broadcast(&self, content: &str, source_channel: &str) {
         for (name, channel) in &self.channels {
@@ -176,6 +192,18 @@ impl ChannelRegistry {
     /// 列出所有已注册的通道
     pub fn list_channels(&self) -> Vec<String> {
         self.channels.keys().cloned().collect()
+    }
+
+    /// 收集所有通道的已知可投递目标（通道名 → 目标列表）
+    pub fn all_known_targets(&self) -> std::collections::HashMap<String, Vec<String>> {
+        let mut result = std::collections::HashMap::new();
+        for (name, channel) in &self.channels {
+            let targets = channel.known_targets();
+            if !targets.is_empty() {
+                result.insert(name.clone(), targets);
+            }
+        }
+        result
     }
 
     /// 检查是否有指定名称的通道

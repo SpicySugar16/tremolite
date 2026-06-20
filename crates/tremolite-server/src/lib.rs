@@ -13,7 +13,7 @@ use serde_json::Value;
 use tower_http::cors::CorsLayer;
 
 use tremolite_core::scheduler::SessionTask;
-use tremolite_dashboard::DASHBOARD_HTML;
+use tremolite_dashboard::dashboard_html;
 use tremolite_message::ChannelRegistry;
 
 pub mod prompts;
@@ -30,6 +30,10 @@ struct AppState {
     // 性能指标
     total_requests: AtomicU64,
     active_connections: AtomicU64,
+    // 当前配置包名称
+    profile_name: String,
+    // 通道注册表（共享引用，用于查询已知目标）
+    channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
 }
 
 impl AppState {
@@ -75,14 +79,18 @@ pub async fn run_server(
     inbound_tx: mpsc::Sender<SessionTask>,
     pending_results: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
     addr: &str,
+    profile_name: &str,
+    channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
 ) -> Result<(), String> {
-    run_server_inner(inbound_tx, pending_results, addr).await
+    run_server_inner(inbound_tx, pending_results, addr, profile_name, channel_registry).await
 }
 
 async fn run_server_inner(
     inbound_tx: mpsc::Sender<SessionTask>,
     pending_results: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
     addr: &str,
+    profile_name: &str,
+    channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
 ) -> Result<(), String> {
     let state = Arc::new(AppState {
         inbound_tx,
@@ -92,6 +100,8 @@ async fn run_server_inner(
             .unwrap_or_default(),
         total_requests: AtomicU64::new(0),
         active_connections: AtomicU64::new(0),
+        profile_name: profile_name.to_string(),
+        channel_registry,
     });
 
     let mut router = Router::new()
@@ -115,6 +125,12 @@ async fn run_server_inner(
         .route("/dashboard/emotion/fluctuate", post(handle_emotion_fluctuate))
         .route("/dashboard/emotion/interval", get(handle_emotion_interval_get))
         .route("/dashboard/emotion/interval", post(handle_emotion_interval_set))
+        .route("/dashboard/cron/targets", get(handle_channel_targets))
+        .route("/dashboard/cron/tasks", get(handle_cron_tasks))
+        .route("/dashboard/cron/create", post(handle_cron_create))
+        .route("/dashboard/cron/{idx}/toggle", post(handle_cron_toggle))
+        .route("/dashboard/cron/{idx}/delete", post(handle_cron_delete))
+        .route("/dashboard/cron/{idx}/update", post(handle_cron_update))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -188,7 +204,7 @@ pub fn initialize_channels(
 
     for (key, config) in channels_config {
         match config {
-            tremolite_config::ChannelConfig::Http { listen, name } => {
+            tremolite_config::ChannelConfig::Http { listen, name, broadcast_target: _ } => {
                 let channel_name = name.clone().unwrap_or_else(|| key.clone());
                 let channel = tremolite_channels::HttpChannel::new(&channel_name, listen);
 
@@ -209,9 +225,10 @@ pub fn initialize_channels(
                     );
                 }
             }
-            tremolite_config::ChannelConfig::NapCat { ws_url, name } => {
+            tremolite_config::ChannelConfig::NapCat { ws_url, name, broadcast_target } => {
                 let channel_name = name.clone().unwrap_or_else(|| key.clone());
-                let channel = tremolite_channels::NapCatChannel::new(&channel_name, ws_url);
+                let channel = tremolite_channels::NapCatChannel::new(&channel_name, ws_url)
+                    .with_broadcast_target(broadcast_target.clone());
 
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     let reg = &mut registry;
@@ -233,11 +250,11 @@ pub fn initialize_channels(
                     );
                 }
             }
-            tremolite_config::ChannelConfig::QqBot { app_id, client_secret, token: _token, production, name } => {
+            tremolite_config::ChannelConfig::QqBot { app_id, client_secret, token: _token, production, name, broadcast_target } => {
                 let channel_name = name.clone().unwrap_or_else(|| key.clone());
                 let channel = tremolite_channels::QqBotChannel::new(
                     &channel_name, app_id, client_secret, *production,
-                );
+                ).with_broadcast_target(broadcast_target.clone());
 
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     let reg = &mut registry;
@@ -442,8 +459,8 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
 
 // ─── Handler：Dashboard ─────────────────────────
 
-async fn handle_dashboard() -> Html<&'static str> {
-    Html(DASHBOARD_HTML)
+async fn handle_dashboard() -> Html<String> {
+    Html(dashboard_html())
 }
 
 const EMOTION_PATH: &str = "/home/spicysugar/.tremolite/data/emotion.json";
@@ -484,11 +501,12 @@ async fn handle_dashboard_status(
         .unwrap_or_default();
     let mut module_entries: Vec<serde_json::Value> = Vec::new();
     // 核心引擎固定显示
-    module_entries.push(serde_json::json!({"name": "core", "label": "核心引擎"}));
+    module_entries.push(serde_json::json!({"name": "core", "label": "核心引擎", "version": tremolite_core::CORE_VERSION}));
     for m in &registered_mods {
         let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(id);
-        module_entries.push(serde_json::json!({"name": id, "label": name}));
+        let version = m.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+        module_entries.push(serde_json::json!({"name": id, "label": name, "version": version}));
     }
     // 去重（避免 dashboard 等模块在两种模式下重复注册）
     let mut seen = std::collections::HashSet::new();
@@ -710,6 +728,20 @@ async fn handle_engine_mod(
                 "能量": format!("{:.1}", energy),
                 "情绪维度": dims,
                 "版本": env!("CARGO_PKG_VERSION"),
+            })
+        }
+        "cron" => {
+            let cron_path = tremolite_dir.join("profiles").join(&state.profile_name).join("cron_tasks.json");
+            let tasks: Vec<serde_json::Value> = std::fs::read_to_string(&cron_path).ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let active = tasks.iter().filter(|t| t.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)).count();
+            serde_json::json!({
+                "任务总数": tasks.len(),
+                "活跃任务": active,
+                "任务列表": tasks,
+                "存储路径": cron_path.to_string_lossy(),
+                "版本": "0.3.0",
             })
         }
         "memory" => {
@@ -1166,9 +1198,127 @@ async fn handle_emotion_interval_set(
     }))
 }
 
-// ─── Handler: 配置包详情数据 ────────────────────
+// ─── Handler: 定时任务 (Cron) 管理 ─────────────────
+fn cron_path(state: &AppState) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".tremolite").join("profiles").join(&state.profile_name).join("cron_tasks.json")
+}
+fn cron_load(state: &AppState) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(cron_path(state))
+        .ok().and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+fn cron_save(state: &AppState, tasks: &[serde_json::Value]) {
+    let _ = std::fs::write(cron_path(state), serde_json::to_string_pretty(tasks).unwrap_or_default());
+}
 
-/// 返回指定配置包的所有文件内容（不含大二进制文件）
+async fn handle_channel_targets(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let mut options: Vec<serde_json::Value> = Vec::new();
+
+    // 内建调度语义——和通道并列的选项
+    options.push(serde_json::json!({"value": "origin", "label": "origin — 投回当前对话", "targets": []}));
+    options.push(serde_json::json!({"value": "all",    "label": "all — 广播所有通道",    "targets": []}));
+    options.push(serde_json::json!({"value": "local",  "label": "local — 仅存本地",      "targets": []}));
+
+    // 已注册的通道——每通道一个选项，携带已知目标
+    if let Some(reg) = &state.channel_registry {
+        let registry = reg.lock().await;
+        let all_targets = registry.all_known_targets();
+        for name in registry.list_channels() {
+            let targets = all_targets.get(&name).cloned().unwrap_or_default();
+            options.push(serde_json::json!({
+                "value": name,
+                "label": name,
+                "targets": targets
+            }));
+        }
+    }
+
+    Json(serde_json::json!({"status":"ok", "options": options}))
+}
+
+async fn handle_cron_tasks(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status":"ok","tasks":cron_load(&state)}))
+}
+async fn handle_cron_create(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("未命名").to_string();
+    let schedule = payload.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 */30 * * * *").to_string();
+    let command = payload.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let deliver = payload.get("deliver").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut list = cron_load(&state);
+    list.push(serde_json::json!({
+        "name": name,
+        "schedule": schedule,
+        "command": command,
+        "deliver": deliver,
+        "enabled": true,
+        "last_run": 0,
+        "created_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+    }));
+    cron_save(&state, &list);
+    Json(serde_json::json!({"status":"ok"}))
+}
+async fn handle_cron_toggle(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(idx): axum::extract::Path<usize>,
+) -> Json<serde_json::Value> {
+    let mut list = cron_load(&state);
+    if let Some(obj) = list.get_mut(idx).and_then(|v| v.as_object_mut()) {
+        let en = obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+        obj.insert("enabled".into(), serde_json::json!(!en));
+        cron_save(&state, &list);
+        Json(serde_json::json!({"status":"ok"}))
+    } else {
+        Json(serde_json::json!({"status":"error","error":"索引超出范围"}))
+    }
+}
+async fn handle_cron_delete(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(idx): axum::extract::Path<usize>,
+) -> Json<serde_json::Value> {
+    let mut list = cron_load(&state);
+    if idx < list.len() {
+        list.remove(idx);
+        cron_save(&state, &list);
+    }
+    Json(serde_json::json!({"status":"ok"}))
+}
+
+async fn handle_cron_update(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(idx): axum::extract::Path<usize>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let mut list = cron_load(&state);
+    if idx < list.len() {
+        if let Some(obj) = list[idx].as_object_mut() {
+            if let Some(name) = payload.get("name").and_then(|v| v.as_str()) {
+                obj.insert("name".into(), serde_json::json!(name));
+            }
+            if let Some(schedule) = payload.get("schedule").and_then(|v| v.as_str()) {
+                obj.insert("schedule".into(), serde_json::json!(schedule));
+            }
+            if let Some(command) = payload.get("command").and_then(|v| v.as_str()) {
+                obj.insert("command".into(), serde_json::json!(command));
+            }
+            if let Some(deliver) = payload.get("deliver").and_then(|v| v.as_str()) {
+                obj.insert("deliver".into(), serde_json::json!(deliver));
+            }
+        }
+        cron_save(&state, &list);
+    }
+    Json(serde_json::json!({"status":"ok"}))
+}
+
+// ─── Handler: 配置包详情数据 ────────────────────
 /// 查询参数: ?name=xxx
 async fn handle_profile_list(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,

@@ -15,7 +15,7 @@ impl DashboardModule {
 impl Module for DashboardModule {
     fn id(&self) -> &str { "dashboard" }
     fn name(&self) -> &str { "仪表盘" }
-    fn version(&self) -> &str { "0.1.0" }
+    fn version(&self) -> &str { env!("CARGO_PKG_VERSION") }
 
     fn provides(&self) -> Vec<Capability> {
         vec![
@@ -48,5 +48,8 @@ impl Module for DashboardModule {
     }
 }
 
-/// Gateway 用这个 HTML 渲染仪表盘界面
-pub const DASHBOARD_HTML: &str = include_str!("../templates/dashboard.html");
+/// Gateway 用这个 HTML 渲染仪表盘界面 — 版本号从 CARGO_PKG_VERSION 动态注入
+pub fn dashboard_html() -> String {
+    let raw = include_str!("../templates/dashboard.html");
+    raw.replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+}

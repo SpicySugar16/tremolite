@@ -378,6 +378,9 @@ pub enum ChannelConfig {
         /// 通道名称（可选，默认使用 config key）
         #[serde(default)]
         name: Option<String>,
+        /// 广播默认投递目标（仅 cron 广播用，http 单向忽略）
+        #[serde(default)]
+        broadcast_target: Option<String>,
     },
     /// NapCat WebSocket 通道（未来扩展）
     #[serde(rename = "napcat")]
@@ -387,6 +390,9 @@ pub enum ChannelConfig {
         /// 通道名称（可选）
         #[serde(default)]
         name: Option<String>,
+        /// 广播默认投递目标，如 "group:123456" 或 "private:654321"
+        #[serde(default)]
+        broadcast_target: Option<String>,
     },
     /// QQ 开放平台 Bot 官方通道
     #[serde(rename = "qqbot")]
@@ -404,6 +410,9 @@ pub enum ChannelConfig {
         /// 通道名称（可选）
         #[serde(default)]
         name: Option<String>,
+        /// 广播默认投递目标，如 "private:2513924725" 或 "group:xxxxxx"
+        #[serde(default)]
+        broadcast_target: Option<String>,
     },
 }
 
@@ -411,21 +420,24 @@ impl ChannelConfig {
     /// 替换配置值中的 ${VAR} 为环境变量
     fn resolve_env(&self) -> Result<Self, ConfigError> {
         Ok(match self {
-            ChannelConfig::Http { listen, name } => ChannelConfig::Http {
+            ChannelConfig::Http { listen, name, broadcast_target } => ChannelConfig::Http {
                 listen: resolve_env_string(listen)?,
                 name: name.clone(),
+                broadcast_target: broadcast_target.clone(),
             },
-            ChannelConfig::NapCat { ws_url, name } => ChannelConfig::NapCat {
+            ChannelConfig::NapCat { ws_url, name, broadcast_target } => ChannelConfig::NapCat {
                 ws_url: resolve_env_string(ws_url)?,
                 name: name.clone(),
+                broadcast_target: broadcast_target.clone(),
             },
-            ChannelConfig::QqBot { app_id, client_secret, token, production, name } => {
+            ChannelConfig::QqBot { app_id, client_secret, token, production, name, broadcast_target } => {
                 ChannelConfig::QqBot {
                     app_id: resolve_env_string(app_id)?,
                     client_secret: resolve_env_string(client_secret)?,
                     token: token.as_ref().map(|t| resolve_env_string(t)).transpose()?,
                     production: *production,
                     name: name.clone(),
+                    broadcast_target: broadcast_target.clone(),
                 }
             }
         })
