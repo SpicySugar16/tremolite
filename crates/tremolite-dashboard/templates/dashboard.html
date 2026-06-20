@@ -324,8 +324,12 @@ window.updateNumber=function(el,key){
 };
 window.refreshEmotion=function(){
   const el=document.getElementById('pageContent');
+  const scroller=document.querySelector('.content');
+  const savedTop=scroller?scroller.scrollTop:0;
   el.innerHTML='<div class="loading">刷新中...</div>';
-  renderEmotion(el);
+  renderEmotion(el).then(()=>{
+    if(scroller) requestAnimationFrame(()=>{scroller.scrollTop=savedTop;});
+  });
 };
 async function refreshEmotionCards(){
   const container=document.getElementById('emotion-status-cards');
@@ -347,9 +351,12 @@ async function refreshEmotionCards(){
 }
 window.fluctuateEmotion=async function(){
   const el=document.getElementById('pageContent');
+  const scroller=document.querySelector('.content');
+  const savedTop=scroller?scroller.scrollTop:0;
   el.innerHTML='<div class="loading">波动中...</div>';
   try{ await apiPost('/dashboard/emotion/fluctuate'); await renderEmotion(el); }
   catch(e){ el.innerHTML='<div class="error">波动失败: '+esc(e.message)+'</div>'; }
+  if(scroller) requestAnimationFrame(()=>{scroller.scrollTop=savedTop;});
 };
 window.updateInterval=async function(minutes){
   const fb=document.getElementById('intervalFeedback');
