@@ -114,7 +114,6 @@ function fmtUptime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s
 // ─── Navigation ────
 const NAV_BASE=[
   {id:'status',ico:'\u25C9',label:'状态'},
-  {id:'emotion',ico:'\u2764',label:'情绪'},
   {id:'config',ico:'\u2699',label:'配置'},
   {id:'sessions',ico:'\u2630',label:'会话'},
   {id:'logs',ico:'\u2261',label:'日志'},
@@ -171,7 +170,6 @@ async function renderContent(){
   
   switch(currentPage){
     case 'status': await renderStatus(el,statusData);break;
-    case 'emotion': await renderEmotion(el);break;
     case 'chat': await renderChat(el,statusData);break;
     case 'config': await renderConfig(el,statusData);break;
     case 'sessions': await renderSessions(el,statusData);break;
@@ -537,6 +535,10 @@ async function renderModule(el,modId,statusData){
             '</div>';
         }
         html+='</div>';
+      }else if(modId==='emotion'){
+        // 情绪引擎专属页面 — 复用 renderEmotion
+        renderEmotion(el);
+        return;
       }else{
       for(const [k,v] of Object.entries(d)){
         if(k==='status')continue;
