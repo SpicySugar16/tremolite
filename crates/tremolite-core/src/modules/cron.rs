@@ -147,10 +147,8 @@ impl CronModule {
             let channel = normalize_deliver(channel_raw);
             let deliver_target = extract_deliver_target(channel_raw);
             let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-            let next_run = calc_next_run_at(&sched, now);
-            // 兼容旧字段：有 command 就用 shell action，否则当 prompt
-            let contains_prompt = entry.get("type").and_then(|v| v.as_str()) == Some("prompt");
-            let action = if contains_prompt {
+            let next_run = entry.get("next_run").and_then(|v| v.as_u64()).unwrap_or_else(|| calc_next_run_at(&sched, now));
+            let action = if entry.get("type").and_then(|v| v.as_str()) == Some("prompt") {
                 JobAction::Prompt(cmd.to_string())
             } else {
                 JobAction::Shell(cmd.to_string())
@@ -261,8 +259,12 @@ impl CronModule {
                                     let channel = normalize_deliver(channel_raw);
                                     let deliver_target = extract_deliver_target(channel_raw);
                                     let enabled = entry.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                                    let next_run = calc_next_run_at(&sched, now);
-                                    let action = JobAction::Shell(cmd.to_string());
+                                    let next_run = entry.get("next_run").and_then(|v| v.as_u64()).unwrap_or_else(|| calc_next_run_at(&sched, now));
+                                    let action = if entry.get("type").and_then(|v| v.as_str()) == Some("prompt") {
+                                        JobAction::Prompt(cmd.to_string())
+                                    } else {
+                                        JobAction::Shell(cmd.to_string())
+                                    };
                                     jl.push(CronJobState {
                                         name: name.to_string(),
                                         schedule: sched,
@@ -280,7 +282,7 @@ impl CronModule {
                 }
 
                 let now = timestamp();
-                let mut to_fire: Vec<(String, JobAction, String, String)> = Vec::new();
+                let mut to_fire: Vec<(String, JobAction, String, String, u64)> = Vec::new();
 
                 if let Ok(mut jl) = jobs.lock() {
                     for job in jl.iter_mut() {
@@ -291,13 +293,14 @@ impl CronModule {
                             Some(t) => t.clone(),
                             None => format!("cron-{}", job.name),
                         };
-                        to_fire.push((job.name.clone(), job.action.clone(), job.channel.clone(), sender));
-                        job.run_count += 1;
                         job.next_run = calc_next_run_at(&job.schedule, now);
+                        let next = job.next_run;
+                        to_fire.push((job.name.clone(), job.action.clone(), job.channel.clone(), sender, next));
+                        job.run_count += 1;
                     }
                 }
 
-                for (name, action, channel, sender) in to_fire {
+                for (name, action, channel, sender, next) in to_fire {
                     match action {
                         JobAction::Prompt(prompt) => {
                             let _ = tx.send(SessionTask {
@@ -318,8 +321,14 @@ impl CronModule {
                                 Ok(out) => {
                                     let stdout = String::from_utf8_lossy(&out.stdout);
                                     let stderr = String::from_utf8_lossy(&out.stderr);
-                                    if !stdout.is_empty() {
+                                    if !stdout.trim().is_empty() {
                                         tracing::info!("cron: shell job '{}' stdout: {}", name, stdout.trim());
+                                        let _ = tx.send(SessionTask {
+                                            session_id: format!("cron-{}", name),
+                                            input: stdout.trim().to_string(),
+                                            channel: channel.clone(),
+                                            sender: sender.clone(),
+                                        });
                                     }
                                     if !stderr.is_empty() {
                                         tracing::warn!("cron: shell job '{}' stderr: {}", name, stderr.trim());
@@ -329,6 +338,22 @@ impl CronModule {
                                 Err(e) => {
                                     tracing::error!("cron: shell job '{}' failed to execute: {}", name, e);
                                 }
+                            }
+                        }
+                    }
+
+                    if let Some(ref path) = json_path {
+                        if let Ok(content) = std::fs::read_to_string(path) {
+                            if let Ok(mut entries) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                                for entry in &mut entries {
+                                    if entry.get("name").and_then(|v| v.as_str()) == Some(&name) {
+                                        if let Some(obj) = entry.as_object_mut() {
+                                            obj.insert("last_run".into(), serde_json::json!(now));
+                                            obj.insert("next_run".into(), serde_json::json!(next));
+                                        }
+                                    }
+                                }
+                                let _ = std::fs::write(path, serde_json::to_string_pretty(&entries).unwrap_or_default());
                             }
                         }
                     }

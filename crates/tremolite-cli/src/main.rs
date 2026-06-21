@@ -197,7 +197,8 @@ fn main() {
     // 模块资源路径从配置包读
     let tm_path = profile_dir.join("tone_map.json").to_string_lossy().to_string();
     let em_path = profile_dir.join("emotion.json").to_string_lossy().to_string();
-    let _ = engine.register_module(Box::new(EmotionModule::new().with_tone_map(&tm_path, &em_path)));
+    let _ = engine.register_module(Box::new(EmotionModule::new()
+        .with_tone_map(&tm_path, &em_path)));
 
     // 系统工具模块——将内置工具注册到模块系统
     let tools_module = ToolsModule::new();
@@ -383,7 +384,7 @@ fn main() {
             if has_channels {
                 if let Some(ref cfg) = config {
                     println!("  Initializing message channels...");
-                    let registry = initialize_channels(&cfg.channels);
+                    let registry = initialize_channels(&cfg.channels, &parsed.profile_name);
                     let mut channels_module = ChannelsModule::from_registry(registry);
                     let channel_names: Vec<String> = channels_module.list_channels();
                     if !channel_names.is_empty() {

@@ -7,12 +7,14 @@ use axum::{
     extract::{Extension, WebSocketUpgrade, ws::{Message, WebSocket}},
     response::{Html, Json, IntoResponse},
     routing::{get, post},
+    http::{header, HeaderMap, HeaderValue},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tower_http::cors::CorsLayer;
 
 use tremolite_core::scheduler::SessionTask;
+use tremolite_cron::Schedule;
 use tremolite_dashboard::dashboard_html;
 use tremolite_message::ChannelRegistry;
 
@@ -131,6 +133,10 @@ async fn run_server_inner(
         .route("/dashboard/cron/{idx}/toggle", post(handle_cron_toggle))
         .route("/dashboard/cron/{idx}/delete", post(handle_cron_delete))
         .route("/dashboard/cron/{idx}/update", post(handle_cron_update))
+        .route("/dashboard/cron/{idx}/run", post(handle_cron_run))
+        .route("/dashboard/channels/manage", get(handle_channels_manage))
+        .route("/dashboard/channels/save", post(handle_channels_save))
+        .route("/dashboard/channels/sync-config", post(handle_channels_sync_config))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -199,6 +205,7 @@ async fn run_server_inner(
 
 pub fn initialize_channels(
     channels_config: &HashMap<String, tremolite_config::ChannelConfig>,
+    profile_name: &str,
 ) -> ChannelRegistry {
     let mut registry = ChannelRegistry::new();
 
@@ -227,8 +234,13 @@ pub fn initialize_channels(
             }
             tremolite_config::ChannelConfig::NapCat { ws_url, name, broadcast_target } => {
                 let channel_name = name.clone().unwrap_or_else(|| key.clone());
+                let home = std::env::var("HOME").unwrap_or_default();
+                let targets_path = std::path::Path::new(&home)
+                    .join(".tremolite").join("profiles").join(profile_name)
+                    .join("channels").join(format!("{}_targets.json", channel_name));
                 let channel = tremolite_channels::NapCatChannel::new(&channel_name, ws_url)
-                    .with_broadcast_target(broadcast_target.clone());
+                    .with_broadcast_target(broadcast_target.clone())
+                    .with_targets_path(Some(targets_path));
 
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     let reg = &mut registry;
@@ -252,9 +264,14 @@ pub fn initialize_channels(
             }
             tremolite_config::ChannelConfig::QqBot { app_id, client_secret, token: _token, production, name, broadcast_target } => {
                 let channel_name = name.clone().unwrap_or_else(|| key.clone());
+                let home = std::env::var("HOME").unwrap_or_default();
+                let targets_path = std::path::Path::new(&home)
+                    .join(".tremolite").join("profiles").join(profile_name)
+                    .join("channels").join(format!("{}_targets.json", channel_name));
                 let channel = tremolite_channels::QqBotChannel::new(
                     &channel_name, app_id, client_secret, *production,
-                ).with_broadcast_target(broadcast_target.clone());
+                ).with_broadcast_target(broadcast_target.clone())
+                 .with_targets_path(Some(targets_path));
 
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     let reg = &mut registry;
@@ -459,8 +476,21 @@ async fn handle_ws_socket(socket: WebSocket, state: Arc<AppState>) {
 
 // ─── Handler：Dashboard ─────────────────────────
 
-async fn handle_dashboard() -> Html<String> {
-    Html(dashboard_html())
+async fn handle_dashboard() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
+    headers.insert(
+        header::PRAGMA,
+        HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(
+        header::EXPIRES,
+        HeaderValue::from_static("0"),
+    );
+    (headers, Html(dashboard_html()))
 }
 
 const EMOTION_PATH: &str = "/home/spicysugar/.tremolite/data/emotion.json";
@@ -806,16 +836,23 @@ async fn handle_engine_mod(
             "版本": env!("CARGO_PKG_VERSION"),
         }),
         "channels" => {
-            let config_str = std::fs::read_to_string(tremolite_dir.join("config.toml")).ok().unwrap_or_default();
+            let config_str = std::fs::read_to_string(
+                tremolite_dir.join("profiles").join(&state.profile_name).join("config.toml")
+            ).ok().unwrap_or_default();
             let mut channel_count = 0u32;
-            let mut channel_names: Vec<String> = Vec::new();
+            let mut channel_names: Vec<serde_json::Value> = Vec::new();
             let mut dash_port = 5835u16;
             for line in config_str.lines() {
                 let t = line.trim();
                 if let Some(rest) = t.strip_prefix("[channels.") {
                     if let Some(end) = rest.find(']') {
                         channel_count += 1;
-                        channel_names.push(rest[..end].to_string());
+                        let ch_name = rest[..end].to_string();
+                        channel_names.push(serde_json::json!({
+                            "名称": ch_name,
+                            "类型": "未知",
+                            "ID": "",
+                        }));
                     }
                 }
                 if let Some(rest) = t.strip_prefix("listen = \"") {
@@ -823,6 +860,26 @@ async fn handle_engine_mod(
                         if let Some(p_str) = rest[..end].split(':').last() {
                             if let Ok(p) = p_str.parse::<u16>() {
                                 dash_port = p;
+                            }
+                        }
+                    }
+                }
+            }
+            // 从 channels_registry 补充类型和 ID
+            let reg_path = tremolite_dir.join("profiles").join(&state.profile_name).join("channels_registry.json");
+            if let Ok(reg_str) = std::fs::read_to_string(&reg_path) {
+                if let Ok(registry) = serde_json::from_str::<Vec<serde_json::Value>>(&reg_str) {
+                    for entry in &registry {
+                        let entry_name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        let entry_id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        for ch in &mut channel_names {
+                            let ch_name = ch.get("名称").and_then(|v| v.as_str()).unwrap_or("");
+                            if ch_name == entry_name {
+                                if let Some(obj) = ch.as_object_mut() {
+                                    obj.insert("类型".into(), serde_json::json!(entry_type));
+                                    obj.insert("ID".into(), serde_json::json!(entry_id));
+                                }
                             }
                         }
                     }
@@ -1009,20 +1066,32 @@ fn compute_emotion_style(plutchik: &serde_json::Map<String, serde_json::Value>) 
     })
 }
 
-// ─── Handler: 情绪状态 + 历史 ──────────────────────
-async fn handle_emotion_status() -> Json<serde_json::Value> {
+fn emotion_path(state: &AppState) -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
+    std::path::Path::new(&home).join(".tremolite").join("profiles").join(&state.profile_name).join("emotion.json")
+}
+
+fn emotion_history_path(state: &AppState) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".tremolite").join("profiles").join(&state.profile_name).join("emotion_history.json")
+}
+
+// ─── Handler: 情绪状态 + 历史 ──────────────────────
+async fn handle_emotion_status(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let path = emotion_path(&state);
+    let hist_path = emotion_history_path(&state);
 
     // 读当前情绪
-    let emotion_data = std::fs::read_to_string(data_dir.join("emotion.json")).ok()
+    let emotion_data = std::fs::read_to_string(&path).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .unwrap_or_default();
     let plutchik = emotion_data.get("plutchik").and_then(|v| v.as_object()).cloned().unwrap_or_default();
     let energy = emotion_data.get("energy").and_then(|v| v.as_f64()).unwrap_or(50.0);
 
     // 读历史
-    let history: Vec<serde_json::Value> = std::fs::read_to_string(data_dir.join("emotion_history.json")).ok()
+    let history: Vec<serde_json::Value> = std::fs::read_to_string(&hist_path).ok()
         .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
         .unwrap_or_default();
 
@@ -1048,11 +1117,11 @@ async fn handle_emotion_status() -> Json<serde_json::Value> {
 
 // ─── Handler: 更新情绪维度 ──────────────────────
 async fn handle_emotion_update(
+    Extension(state): Extension<Arc<AppState>>,
     axum::Json(payload): axum::Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
-    let path = data_dir.join("emotion.json");
+    let path = emotion_path(&state);
+    let hist_path = emotion_history_path(&state);
 
     let dimension = payload.get("dimension").and_then(|v| v.as_str()).unwrap_or("");
     let value = payload.get("value").and_then(|v| v.as_f64()).unwrap_or(50.0);
@@ -1095,7 +1164,6 @@ async fn handle_emotion_update(
         "plutchik": new_plutchik,
         "style": style.get("style_label").and_then(|v| v.as_str()).unwrap_or(""),
     });
-    let hist_path = data_dir.join("emotion_history.json");
     let mut history: Vec<serde_json::Value> = std::fs::read_to_string(&hist_path).ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
@@ -1107,10 +1175,11 @@ async fn handle_emotion_update(
 }
 
 // ─── Handler: 立即情绪波动 ──────────────────────
-async fn handle_emotion_fluctuate() -> Json<serde_json::Value> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
-    let path = data_dir.join("emotion.json");
+async fn handle_emotion_fluctuate(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let path = emotion_path(&state);
+    let hist_path = emotion_history_path(&state);
 
     let mut data: serde_json::Value = std::fs::read_to_string(&path).ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -1144,7 +1213,6 @@ async fn handle_emotion_fluctuate() -> Json<serde_json::Value> {
         "plutchik": new_plutchik,
         "style": style.get("style_label").and_then(|v| v.as_str()).unwrap_or(""),
     });
-    let hist_path = data_dir.join("emotion_history.json");
     let mut history: Vec<serde_json::Value> = std::fs::read_to_string(&hist_path).ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
@@ -1156,10 +1224,10 @@ async fn handle_emotion_fluctuate() -> Json<serde_json::Value> {
 }
 
 // ─── Handler: 读取自动波动间隔 ──────────────────
-async fn handle_emotion_interval_get() -> Json<serde_json::Value> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
-    let path = data_dir.join("emotion.json");
+async fn handle_emotion_interval_get(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let path = emotion_path(&state);
 
     let data: serde_json::Value = std::fs::read_to_string(&path).ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -1174,11 +1242,10 @@ async fn handle_emotion_interval_get() -> Json<serde_json::Value> {
 
 // ─── Handler: 设置自动波动间隔 ──────────────────
 async fn handle_emotion_interval_set(
+    Extension(state): Extension<Arc<AppState>>,
     axum::Json(payload): axum::Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let data_dir = std::path::Path::new(&home).join(".tremolite").join("data");
-    let path = data_dir.join("emotion.json");
+    let path = emotion_path(&state);
 
     let seconds = payload.get("seconds").and_then(|v| v.as_f64()).unwrap_or(1800.0);
     let seconds = seconds.max(10.0).min(3600.0);
@@ -1215,6 +1282,13 @@ fn cron_save(state: &AppState, tasks: &[serde_json::Value]) {
 async fn handle_channel_targets(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let reg_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name).join("channels_registry.json");
+    let channels: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
     let mut options: Vec<serde_json::Value> = Vec::new();
 
     // 内建调度语义——和通道并列的选项
@@ -1222,21 +1296,134 @@ async fn handle_channel_targets(
     options.push(serde_json::json!({"value": "all",    "label": "all — 广播所有通道",    "targets": []}));
     options.push(serde_json::json!({"value": "local",  "label": "local — 仅存本地",      "targets": []}));
 
-    // 已注册的通道——每通道一个选项，携带已知目标
-    if let Some(reg) = &state.channel_registry {
-        let registry = reg.lock().await;
-        let all_targets = registry.all_known_targets();
-        for name in registry.list_channels() {
-            let targets = all_targets.get(&name).cloned().unwrap_or_default();
-            options.push(serde_json::json!({
-                "value": name,
-                "label": name,
-                "targets": targets
-            }));
-        }
+    // 从 channels_registry.json 读取实际消息通道，id 自动编号为 ch_序号（从1开始）
+    for (i, ch) in channels.iter().enumerate() {
+        let id = format!("ch_{:02}", i + 1);
+        let name = ch.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let ch_type = ch.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let label = format!("{} · {}（{}）", id, name, ch_type);
+        options.push(serde_json::json!({
+            "value": name,
+            "label": label,
+            "targets": []
+        }));
     }
 
     Json(serde_json::json!({"status":"ok", "options": options}))
+}
+
+async fn handle_channels_manage(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let reg_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name).join("channels_registry.json");
+    let data: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    Json(serde_json::json!({"status":"ok","data":data}))
+}
+
+async fn handle_channels_save(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let reg_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name).join("channels_registry.json");
+    if let Some(parent) = reg_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let channels = payload.get("channels").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let _ = std::fs::write(&reg_path, serde_json::to_string_pretty(&channels).unwrap_or_default());
+    Json(serde_json::json!({"status":"ok"}))
+}
+
+async fn handle_channels_sync_config(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_dir = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name);
+    let reg_path = profile_dir.join("channels_registry.json");
+    let config_path = profile_dir.join("config.toml");
+
+    let channels: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    let mut channels_toml = String::new();
+    for ch in &channels {
+        let name = ch.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let ch_type = ch.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        channels_toml.push_str(&format!("\n[channels.{}]\n", name));
+        match ch_type {
+            "NapCat" => {
+                let ws_url = ch.get("ws_url").and_then(|v| v.as_str()).unwrap_or("");
+                let broadcast_target = ch.get("broadcast_target").and_then(|v| v.as_str()).unwrap_or("");
+                channels_toml.push_str(&format!("type = \"NapCat\"\nws_url = \"{}\"\n", ws_url));
+                if !broadcast_target.is_empty() {
+                    channels_toml.push_str(&format!("broadcast_target = \"{}\"\n", broadcast_target));
+                }
+            }
+            "QqBot" => {
+                let app_id = ch.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+                let client_secret = ch.get("client_secret").and_then(|v| v.as_str()).unwrap_or("");
+                let token = ch.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                let production = ch.get("production").and_then(|v| v.as_bool()).unwrap_or(false);
+                let broadcast_target = ch.get("broadcast_target").and_then(|v| v.as_str()).unwrap_or("");
+                channels_toml.push_str(&format!("type = \"QqBot\"\napp_id = \"{}\"\nclient_secret = \"{}\"\ntoken = \"{}\"\nproduction = {}\n", app_id, client_secret, token, production));
+                if !broadcast_target.is_empty() {
+                    channels_toml.push_str(&format!("broadcast_target = \"{}\"\n", broadcast_target));
+                }
+            }
+            _ => {
+                channels_toml.push_str(&format!("type = \"{}\"\n", ch_type));
+                for (k, v) in ch.as_object().unwrap_or(&serde_json::Map::new()) {
+                    if k == "name" || k == "type" || k == "id" { continue; }
+                    if let Some(s) = v.as_str() {
+                        channels_toml.push_str(&format!("{} = \"{}\"\n", k, s));
+                    } else if let Some(b) = v.as_bool() {
+                        channels_toml.push_str(&format!("{} = {}\n", k, b));
+                    } else if let Some(n) = v.as_f64() {
+                        channels_toml.push_str(&format!("{} = {}\n", k, n));
+                    }
+                }
+            }
+        }
+    }
+
+    let existing_config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let mut lines: Vec<&str> = existing_config.lines().collect();
+    // 移除旧的 [channels.*] 段
+    let mut keep = Vec::new();
+    let mut in_channels = false;
+    for line in &lines {
+        if line.trim().starts_with("[channels.") {
+            in_channels = true;
+            continue;
+        }
+        if in_channels {
+            if line.trim().starts_with('[') && !line.trim().starts_with("[channels.") {
+                in_channels = false;
+                keep.push(*line);
+            }
+            continue;
+        }
+        keep.push(*line);
+    }
+    let cleaned = keep.join("\n");
+    let new_config = if channels_toml.is_empty() {
+        cleaned
+    } else {
+        format!("{}{}", cleaned, channels_toml)
+    };
+    let _ = std::fs::write(&config_path, &new_config);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": "已同步到配置，重启生效",
+    }))
 }
 
 async fn handle_cron_tasks(
@@ -1252,8 +1439,9 @@ async fn handle_cron_create(
     let schedule = payload.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 */30 * * * *").to_string();
     let command = payload.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let deliver = payload.get("deliver").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cmd_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let mut list = cron_load(&state);
-    list.push(serde_json::json!({
+    let mut entry = serde_json::json!({
         "name": name,
         "schedule": schedule,
         "command": command,
@@ -1262,7 +1450,11 @@ async fn handle_cron_create(
         "last_run": 0,
         "created_at": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-    }));
+    });
+    if !cmd_type.is_empty() {
+        entry["type"] = serde_json::json!(cmd_type);
+    }
+    list.push(entry);
     cron_save(&state, &list);
     Json(serde_json::json!({"status":"ok"}))
 }
@@ -1292,6 +1484,117 @@ async fn handle_cron_delete(
     Json(serde_json::json!({"status":"ok"}))
 }
 
+fn normalize_deliver(d: &str) -> &str {
+    match d {
+        "" | "all" | "broadcast" | "everywhere" => "__all__",
+        _ => {
+            if let Some(pos) = d.find(':') {
+                &d[..pos]
+            } else {
+                d
+            }
+        }
+    }
+}
+
+fn extract_deliver_target(d: &str) -> Option<String> {
+    let pos = d.find(':')?;
+    let rest = &d[pos + 1..];
+    if rest.is_empty() { None } else { Some(rest.to_string()) }
+}
+
+fn parse_schedule_str(s: &str) -> Schedule {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() >= 5 {
+        if parts.len() >= 6 && parts[0] == "0" && parts[1].starts_with("*/") {
+            let n: u64 = parts[1].trim_start_matches("*/").parse().unwrap_or(30);
+            return Schedule::EverySecs(n * 60);
+        }
+        if parts.len() >= 6 && parts[0] == "0" && parts[1] == "0" && parts[2].starts_with("*/") {
+            let n: u64 = parts[2].trim_start_matches("*/").parse().unwrap_or(1);
+            return Schedule::EverySecs(n * 3600);
+        }
+        if parts.len() >= 6 && parts[3] == "*" && parts[4] == "*" && parts[5] == "*" {
+            let hour: u8 = parts[2].parse().unwrap_or(0);
+            let minute: u8 = parts[1].parse().unwrap_or(0);
+            return Schedule::Daily { hour, minute };
+        }
+    }
+    let five: String = parts.iter().take(5).cloned().collect::<Vec<_>>().join(" ");
+    Schedule::CronExpr(five)
+}
+
+async fn handle_cron_run(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(idx): axum::extract::Path<usize>,
+) -> Json<serde_json::Value> {
+    let mut list = cron_load(&state);
+    let entry = match list.get_mut(idx) {
+        Some(v) => v,
+        None => return Json(serde_json::json!({"status":"error","error":"索引超出范围"})),
+    };
+    let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("未命名").to_string();
+    let command = entry.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let deliver_raw = entry.get("deliver").and_then(|v| v.as_str()).unwrap_or("origin");
+    let channel = normalize_deliver(deliver_raw).to_string();
+    let is_prompt = entry.get("type").and_then(|v| v.as_str()) == Some("prompt");
+    let sched_str = entry.get("schedule").and_then(|v| v.as_str()).unwrap_or("0 */30 * * * *");
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let sched = parse_schedule_str(sched_str);
+    let next_run = tremolite_cron::calc_next_run_at(&sched, now_secs);
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert("last_run".into(), serde_json::json!(now_secs));
+        obj.insert("next_run".into(), serde_json::json!(next_run));
+    }
+    cron_save(&state, &list);
+
+    if is_prompt {
+        let task = SessionTask {
+            session_id: format!("cron-{}", name),
+            input: command,
+            channel,
+            sender: "manual-run".to_string(),
+        };
+        if state.inbound_tx.send(task).is_err() {
+            return Json(serde_json::json!({"status":"error","error":"调度器不可用"}));
+        }
+        Json(serde_json::json!({"status":"ok","message":"已触发立即执行"}))
+    } else {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .output();
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if !stdout.trim().is_empty() {
+                    let task = SessionTask {
+                        session_id: format!("cron-{}", name),
+                        input: stdout.trim().to_string(),
+                        channel,
+                        sender: format!("cron-{}", name),
+                    };
+                    let _ = state.inbound_tx.send(task);
+                }
+                let mut msg = format!("shell 任务 '{}' 已执行 (exit: {})", name, out.status);
+                if !stdout.is_empty() {
+                    msg.push_str(&format!("\nstdout:\n{}", stdout.trim()));
+                }
+                if !stderr.is_empty() {
+                    msg.push_str(&format!("\nstderr:\n{}", stderr.trim()));
+                }
+                Json(serde_json::json!({"status":"ok","message": msg}))
+            }
+            Err(e) => {
+                Json(serde_json::json!({"status":"error","error": format!("执行失败: {}", e)}))
+            }
+        }
+    }
+}
+
 async fn handle_cron_update(
     Extension(state): Extension<Arc<AppState>>,
     axum::extract::Path(idx): axum::extract::Path<usize>,
@@ -1311,6 +1614,13 @@ async fn handle_cron_update(
             }
             if let Some(deliver) = payload.get("deliver").and_then(|v| v.as_str()) {
                 obj.insert("deliver".into(), serde_json::json!(deliver));
+            }
+            if let Some(cmd_type) = payload.get("type").and_then(|v| v.as_str()) {
+                if cmd_type.is_empty() {
+                    obj.remove("type");
+                } else {
+                    obj.insert("type".into(), serde_json::json!(cmd_type));
+                }
             }
         }
         cron_save(&state, &list);

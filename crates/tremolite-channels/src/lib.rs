@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -67,6 +68,17 @@ struct MessageAuthor {
     pub username: String,
 }
 
+// ─── 已知目标持久化 ──────────────────────────────
+
+/// 将已知目标列表写入文件
+fn save_targets(path: &Option<PathBuf>, targets: &[String]) {
+    if let Some(ref p) = path {
+        if let Ok(data) = serde_json::to_string(targets) {
+            let _ = std::fs::write(p, &data);
+        }
+    }
+}
+
 // ─── QQ Bot 常量 ──────────────────────────────────
 
 /// 沙箱环境 API 地址
@@ -116,6 +128,8 @@ pub struct QqBotChannel {
     broadcast_target: Option<String>,
     /// 从接收消息中自动收集的已知可投递目标
     seen_targets: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 已知目标持久化文件路径
+    targets_path: Option<PathBuf>,
 }
 
 impl QqBotChannel {
@@ -135,12 +149,31 @@ impl QqBotChannel {
             shutdown_tx: tokio::sync::Mutex::new(None),
             broadcast_target: None,
             seen_targets: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            targets_path: None,
         }
     }
 
     /// 设置广播默认投递目标
     pub fn with_broadcast_target(mut self, target: Option<String>) -> Self {
         self.broadcast_target = target;
+        self
+    }
+
+    /// 设置已知目标持久化路径
+    pub fn with_targets_path(mut self, path: Option<PathBuf>) -> Self {
+        self.targets_path = path;
+        if let Some(ref p) = self.targets_path {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(data) = std::fs::read_to_string(p) {
+                if let Ok(targets) = serde_json::from_str::<Vec<String>>(&data) {
+                    if let Ok(mut t) = self.seen_targets.lock() {
+                        *t = targets;
+                    }
+                }
+            }
+        }
         self
     }
 
@@ -236,6 +269,7 @@ impl Channel for QqBotChannel {
         let client_secret = self.client_secret.clone();
         let api_base = self.api_base().to_string();
         let seen_targets = self.seen_targets.clone();
+        let targets_path = self.targets_path.clone();
 
         tokio::spawn(async move {
             // 用 tokio::pin! 固定 shutdown_rx 以便在循环中重复使用
@@ -252,7 +286,7 @@ impl Channel for QqBotChannel {
                         return;
                     }
                     result = run_qqbot_connection(
-                        &name, &app_id, &client_secret, &api_base, &sender, &mut cached_token, &seen_targets
+                        &name, &app_id, &client_secret, &api_base, &sender, &mut cached_token, &seen_targets, &targets_path
                     ) => {
                         if let Err(e) = result {
                             tracing::error!("channel '{}': connection error: {}", name, e);
@@ -277,8 +311,14 @@ impl Channel for QqBotChannel {
                 }
                 None if msg.target.contains(':') => &msg.target,
                 None => {
-                    tracing::warn!("channel '{}': cannot send to '{}', no broadcast_target configured", self.name, msg.target);
-                    return Ok(());
+                    let known = self.known_targets();
+                    if let Some(first) = known.first() {
+                        tracing::warn!("channel '{}': falling back to first known target '{}' for '{}'", self.name, first, msg.target);
+                        &*first.clone()
+                    } else {
+                        tracing::warn!("channel '{}': cannot send to '{}', no broadcast_target and no known targets", self.name, msg.target);
+                        return Ok(());
+                    }
                 }
             }
         } else {
@@ -356,6 +396,7 @@ async fn run_qqbot_connection(
     sender: &mpsc::Sender<InboundMessage>,
     cached_token: &mut Option<(String, std::time::Instant)>,
     seen_targets: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    targets_path: &Option<PathBuf>,
 ) -> Result<(), String> {
     // 1. 获取/刷新 OAuth2 access_token
     let access_token = get_or_refresh_token(cached_token, app_id, client_secret).await?;
@@ -490,6 +531,7 @@ async fn run_qqbot_connection(
                                             if let Ok(mut targets) = seen_targets.lock() {
                                                 if !targets.contains(&target) {
                                                     targets.push(target.clone());
+                                                    save_targets(targets_path, &targets);
                                                     tracing::debug!("channel '{}': new target recorded: {}", name, target);
                                                 }
                                             }
@@ -690,6 +732,8 @@ pub struct NapCatChannel {
     broadcast_target: Option<String>,
     /// 从接收消息中自动收集的已知可投递目标
     seen_targets: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 已知目标持久化文件路径
+    targets_path: Option<PathBuf>,
 }
 
 impl NapCatChannel {
@@ -714,12 +758,31 @@ impl NapCatChannel {
             shutdown_tx: tokio::sync::Mutex::new(None),
             broadcast_target: None,
             seen_targets: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            targets_path: None,
         }
     }
 
     /// 设置广播默认投递目标
     pub fn with_broadcast_target(mut self, target: Option<String>) -> Self {
         self.broadcast_target = target;
+        self
+    }
+
+    /// 设置已知目标持久化路径
+    pub fn with_targets_path(mut self, path: Option<PathBuf>) -> Self {
+        self.targets_path = path;
+        if let Some(ref p) = self.targets_path {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(data) = std::fs::read_to_string(p) {
+                if let Ok(targets) = serde_json::from_str::<Vec<String>>(&data) {
+                    if let Ok(mut t) = self.seen_targets.lock() {
+                        *t = targets;
+                    }
+                }
+            }
+        }
         self
     }
 }
@@ -740,6 +803,7 @@ impl Channel for NapCatChannel {
         let ws_url = self.ws_url.clone();
         let http_base = self.http_base.clone();
         let seen_targets = self.seen_targets.clone();
+        let targets_path = self.targets_path.clone();
 
         // 后台任务：连接 NapCat WS 并持续接收事件
         tokio::spawn(async move {
@@ -763,7 +827,7 @@ impl Channel for NapCatChannel {
                                 msg = read.next() => {
                                     match msg {
                                         Some(Ok(Message::Text(text))) => {
-                                            if let Err(e) = handle_event(&sender, &text, &name, &http_base, &seen_targets).await {
+                                            if let Err(e) = handle_event(&sender, &text, &name, &http_base, &seen_targets, &targets_path).await {
                                                 tracing::warn!("channel '{}': event handling error: {}", name, e);
                                             }
                                         }
@@ -817,8 +881,14 @@ impl Channel for NapCatChannel {
                 }
                 None if msg.target.contains(':') => &msg.target,
                 None => {
-                    tracing::warn!("channel '{}': cannot send to '{}', no broadcast_target configured", self.name, msg.target);
-                    return Ok(());
+                    let known = self.known_targets();
+                    if let Some(first) = known.first() {
+                        tracing::warn!("channel '{}': falling back to first known target '{}' for '{}'", self.name, first, msg.target);
+                        &*first.clone()
+                    } else {
+                        tracing::warn!("channel '{}': cannot send to '{}', no broadcast_target and no known targets", self.name, msg.target);
+                        return Ok(());
+                    }
                 }
             }
         } else {
@@ -919,6 +989,7 @@ async fn handle_event(
     _channel_name: &str,
     _http_base: &str,
     seen_targets: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    targets_path: &Option<PathBuf>,
 ) -> Result<(), String> {
     let event: OneBotEvent = serde_json::from_str(text)
         .map_err(|e| format!("failed to parse OneBot event: {}", e))?;
@@ -952,6 +1023,7 @@ async fn handle_event(
     if let Ok(mut targets) = seen_targets.lock() {
         if !targets.contains(&event_target) {
             targets.push(event_target);
+            save_targets(targets_path, &targets);
             tracing::debug!("channel '{}': new target recorded", _channel_name);
         }
     }

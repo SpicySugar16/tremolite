@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-channels"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -3056,7 +3056,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-cron"
-version = "0.2.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3087,7 +3087,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-emotion"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "rand 0.8.6",
@@ -3149,7 +3149,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-message"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -3221,6 +3221,7 @@ dependencies = [
  "tremolite-channels",
  "tremolite-config",
  "tremolite-core",
+ "tremolite-cron",
  "tremolite-dashboard",
  "tremolite-emotion",
  "tremolite-llm",

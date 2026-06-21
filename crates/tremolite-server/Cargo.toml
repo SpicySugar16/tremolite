@@ -22,3 +22,4 @@ tremolite-emotion = { path = "../tremolite-emotion" }
 tremolite-dashboard = { path = "../tremolite-dashboard" }
 tremolite-message = { path = "../tremolite-message" }
 tremolite-channels = { path = "../tremolite-channels" }
+tremolite-cron = { path = "../tremolite-cron" }

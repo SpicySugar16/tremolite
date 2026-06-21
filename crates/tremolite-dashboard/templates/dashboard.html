@@ -90,7 +90,6 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 <body>
 <div class="topbar">
   <h1>✦ 透闪石</h1>
-  <span class="badge" id="versionBadge">{{VERSION}}</span>
   <span class="badge" id="statusBadge">connecting</span>
   <span class="sub" id="uptimeDisplay"></span>
   <button class="btn sm" onclick="location.reload()" style="font-size:0.7rem">↻</button>
@@ -414,6 +413,218 @@ window.sendMessage=async function(){
   el.scrollTop=el.scrollHeight;
 };
 
+// ─── Channels 模块页面 ────────────────
+let _channelsData=[];
+
+function renderChannelsPage(el,data){
+  el.innerHTML='<div class="loading">加载中...</div>';
+  loadChannelsManage();
+}
+
+async function loadChannelsManage(){
+  const el=document.getElementById('pageContent');
+  try{
+    const r=await api('/dashboard/channels/manage');
+    if(r.status!=='ok'){el.innerHTML='<div class="error">数据加载失败</div>';return;}
+    _channelsData=r.data||[];
+    renderChannelsTable(el);
+  }catch(e){
+    el.innerHTML='<div class="error">网络错误: '+esc(e.message)+'</div>';
+  }
+}
+
+function renderChannelsTable(el){
+  const ch=_channelsData;
+  let html='<div class="grid-2"><div class="card"><div class="card-hd"><h3>\uD83D\uDCE1 消息通道</h3></div>'+
+    '<div class="row"><span class="l">模块ID</span><span class="v">channels</span></div>'+
+    '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">运行中</span></span></div>'+
+    '<div class="row"><span class="l">注册通道</span><span class="v">'+ch.length+' 个</span></div>'+
+    '<div class="row"><span class="l">端口</span><span class="v">—</span></div></div>'+
+    '<div class="card"><div class="card-hd"><h3>\uD83D\uDCCB 说明</h3></div>'+
+    '<div style="font-size:0.78rem;color:var(--fg2);line-height:1.6">消息通道模块管理透闪石与外部消息平台的连接。每个通道对应一个消息来源，支持 QQ Bot、NapCat、HTTP Webhook 等协议接入，负责消息收发和目标信息采集。</div></div></div>';
+
+  html+='<div class="card" id="channelsSection"><div class="card-hd"><h3>\uD83C\uDF10 通道列表</h3><button class="btn sm accent" onclick="showChannelsAdd()">+ 添加</button></div>';
+  if(!ch.length){
+    html+='<div class="loading" style="padding:12px">暂无通道。点「+ 添加」创建一个~</div>';
+  }else{
+    html+='<table class="hist-table"><thead><tr><th>#</th><th>名称</th><th>类型</th><th>目标</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+    for(let i=0;i<ch.length;i++){
+      const c=ch[i];
+      const configStr=c.config?Object.keys(c.config).map(k=>k+': '+esc(String(c.config[k]))).join('<br>'):'—';
+      html+='<tr><td>'+(i+1)+'</td>'+
+        '<td style="font-family:var(--mono);font-size:0.78rem;color:var(--accent)">'+esc(c.name||c.id)+'</td>'+
+        '<td>'+esc(c.type||'?')+'</td>'+
+        '<td style="font-size:0.72rem;color:var(--fg2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(configStr.replace(/<br>/g,' | '))+'">'+
+          (c.broadcast_target||'—')+'</td>'+
+        '<td><span style="color:var(--green);font-size:0.72rem">\u25C9 已注册</span></td>'+
+        '<td style="display:flex;gap:3px;justify-content:center">'+
+        '<button class="btn sm" onclick="showChannelsEdit('+i+')" title="修改">\u270F\uFE0F</button>'+
+        '<button class="btn sm" onclick="confirmDeleteChannel('+i+',\''+esc(c.name||c.id)+'\')" title="删除" style="color:var(--red)">\u2715</button>'+
+        '</td></tr>';
+    }
+    html+='</tbody></table>';
+  }
+  html+='</div>';
+
+  html+='<div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">'+
+    '<button class="btn accent" onclick="syncChannelsConfig()">\u26A1 同步到配置 &amp; 重启</button></div>';
+
+  html+='<div id="channelsDlg" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center">'+
+    '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;width:420px;max-width:90%">'+
+    '<h3 style="color:var(--accent);margin-bottom:12px"><span id="channelsDlgTitle">添加通道</span></h3>'+
+    '<input id="channelsEditIdx" type="hidden" value="-1">'+
+    '<input id="channelsEditId" type="hidden" value="">'+
+
+    '<div style="margin-bottom:10px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">名称</label>'+
+    '<input id="chName" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：QQ 主群">'+
+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">类型</label>'+
+    '<select id="chType" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" onchange="switchChType()">'+
+    '<option value="QqBot">QqBot</option>'+
+    '<option value="NapCat">NapCat</option>'+
+    '<option value="Http">Http</option></select></div>'+
+
+    '<div id="chFieldsQqBot" style="margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">App ID</label>'+
+    '<input id="chQqAppId" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="机器人 AppID">'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Client Secret</label>'+
+    '<input id="chQqSecret" type="password" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="机器人 Client Secret">'+
+    '<div style="margin-top:8px;display:flex;align-items:center;gap:6px">'+
+    '<label class="toggle"><input id="chQqProduction" type="checkbox"><span class="sl"></span></label>'+
+    '<span style="color:var(--fg2);font-size:0.78rem">生产环境</span></div></div>'+
+
+    '<div id="chFieldsNapCat" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">WebSocket URL</label>'+
+    '<input id="chNapCatWs" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="ws://127.0.0.1:8080">'+
+
+    '<div id="chFieldsHttp" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">监听地址</label>'+
+    '<input id="chHttpListen" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="0.0.0.0:5836">'+
+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">广播目标（可选）</label>'+
+    '<input id="chBroadcast" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：group_12345">'+
+
+    '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">'+
+    '<button class="btn" onclick="closeChannelsDlg()">取消</button>'+
+    '<button class="btn accent" onclick="doSaveChannel()">保存</button></div></div>';
+
+  el.innerHTML=html;
+}
+
+window.switchChType=function(){
+  const t=document.getElementById('chType').value;
+  document.getElementById('chFieldsQqBot').style.display=t==='QqBot'?'':'none';
+  document.getElementById('chFieldsNapCat').style.display=t==='NapCat'?'':'none';
+  document.getElementById('chFieldsHttp').style.display=t==='Http'?'':'none';
+};
+
+window.showChannelsAdd=function(){
+  document.getElementById('channelsEditIdx').value='-1';
+  document.getElementById('channelsEditId').value='';
+  document.getElementById('channelsDlgTitle').textContent='添加通道';
+  document.getElementById('chName').value='';
+  document.getElementById('chType').value='QqBot';
+  document.getElementById('chQqAppId').value='';
+  document.getElementById('chQqSecret').value='';
+  document.getElementById('chQqProduction').checked=false;
+  document.getElementById('chNapCatWs').value='';
+  document.getElementById('chHttpListen').value='';
+  document.getElementById('chBroadcast').value='';
+  switchChType();
+  document.getElementById('channelsDlg').style.display='flex';
+};
+
+window.showChannelsEdit=function(idx){
+  const c=_channelsData[idx];
+  if(!c)return;
+  document.getElementById('channelsEditIdx').value=String(idx);
+  document.getElementById('channelsEditId').value=c.id||'';
+  document.getElementById('channelsDlgTitle').textContent='编辑通道';
+  document.getElementById('chName').value=c.name||'';
+  document.getElementById('chType').value=c.type||'QqBot';
+  document.getElementById('chQqAppId').value=(c.config&&c.config.app_id)||'';
+  document.getElementById('chQqSecret').value=(c.config&&c.config.client_secret)||'';
+  document.getElementById('chQqProduction').checked=!!(c.config&&c.config.production);
+  document.getElementById('chNapCatWs').value=(c.config&&c.config.ws_url)||'';
+  document.getElementById('chHttpListen').value=(c.config&&c.config.listen)||'';
+  document.getElementById('chBroadcast').value=c.broadcast_target||'';
+  switchChType();
+  document.getElementById('channelsDlg').style.display='flex';
+};
+
+window.closeChannelsDlg=function(){
+  document.getElementById('channelsDlg').style.display='none';
+};
+
+window.doSaveChannel=async function(){
+  const idx=parseInt(document.getElementById('channelsEditIdx').value||'-1');
+  const id=document.getElementById('channelsEditId').value||('ch_'+Date.now());
+  const name=document.getElementById('chName').value.trim()||'未命名';
+  const type=document.getElementById('chType').value;
+  const broadcast_target=document.getElementById('chBroadcast').value.trim()||'';
+
+  let config={};
+  if(type==='QqBot'){
+    config={app_id:document.getElementById('chQqAppId').value.trim(),client_secret:document.getElementById('chQqSecret').value.trim(),production:document.getElementById('chQqProduction').checked};
+  }else if(type==='NapCat'){
+    config={ws_url:document.getElementById('chNapCatWs').value.trim()};
+  }else if(type==='Http'){
+    config={listen:document.getElementById('chHttpListen').value.trim()};
+  }
+
+  const channels=[..._channelsData];
+  if(idx>=0){
+    channels[idx]={id,name,type,config,broadcast_target};
+  }else{
+    channels.push({id,name,type,config,broadcast_target});
+  }
+
+  try{
+    const r=await apiPost('/dashboard/channels/save',{channels});
+    if(r.status==='ok'){
+      closeChannelsDlg();
+      _channelsData=channels;
+      renderChannelsTable(document.getElementById('pageContent'));
+    }else{
+      alert('保存失败: '+(r.error||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误');
+  }
+};
+
+window.confirmDeleteChannel=function(idx,name){
+  if(confirm('确定删除通道 '+name+' 吗？'))deleteChannel(idx);
+};
+window.deleteChannel=async function(idx){
+  const channels=[..._channelsData];
+  channels.splice(idx,1);
+  try{
+    const r=await apiPost('/dashboard/channels/save',{channels});
+    if(r.status==='ok'){
+      _channelsData=channels;
+      renderChannelsTable(document.getElementById('pageContent'));
+    }else{
+      alert('删除失败');
+    }
+  }catch(e){
+    alert('网络错误');
+  }
+};
+
+window.syncChannelsConfig=async function(){
+  try{
+    const r=await apiPost('/dashboard/channels/sync-config');
+    if(r.status==='ok'){
+      alert('已同步到配置文件，请重启生效。');
+    }else{
+      alert('同步失败: '+(r.error||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误');
+  }
+};
+
 // ─── Cron 模块页面 ──────────────────────
 function renderCronPage(el,data){
   if(!data){el.innerHTML='<div class="card"><div class="loading">暂无数据</div></div>';return;}
@@ -436,16 +647,17 @@ function renderCronPage(el,data){
     html+='<table class="hist-table"><thead><tr><th>#</th><th>名称</th><th>内容</th><th>Cron</th><th>投递</th><th>状态</th><th>上次</th><th>操作</th></tr></thead><tbody>';
     for(let i=0;i<tasks.length;i++){
       const t=tasks[i];
-      const st=t.enabled?'<span style="color:var(--green)">🟢 启用</span>':'<span style="color:var(--fg3)">🔴 暂停</span>';
+      const st=t.enabled?'<span style="color:var(--green);display:inline-block;width:64px">🟢 启用</span>':'<span style="color:var(--fg3);display:inline-block;width:64px">🔴 暂停</span>';
       const lr=t.last_run&&t.last_run!==0?new Date(t.last_run*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'—';
       const cmd=esc(t.command||t.content||'').substring(0,40);
       const dv=esc(t.deliver||'origin');
       html+='<tr><td>'+(i+1)+'</td><td>'+esc(t.name||'')+'</td><td style="font-size:0.72rem;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+cmd+'">'+cmd+'</td><td style="font-family:var(--mono);font-size:0.7rem">'+esc(t.schedule||'')+'</td><td style="font-size:0.72rem;color:var(--fg3)">'+dv+'</td><td>'+st+'</td><td>'+lr+'</td>'+
-        '<td style="display:flex;gap:3px;justify-content:center">'+
-        '<button class="btn sm" onclick="apiPost(\'/dashboard/cron/'+i+'/toggle\').then(()=>reloadCron())" title="切换">'+(t.enabled?'⏸':'▶')+'</button>'+
-        '<button class="btn sm" onclick="showCronEdit('+i+')" title="修改">✏️</button>'+
-        '<button class="btn sm" onclick="if(confirm(\'删除?\'))apiPost(\'/dashboard/cron/'+i+'/delete\').then(()=>reloadCron())" title="删除" style="color:var(--red)">✕</button>'+
-        '</td></tr>';
+'<td style="display:flex;gap:4px;justify-content:center;align-items:center">'+
+'<button class="btn sm" onclick="apiPost(\'/dashboard/cron/'+i+'/toggle\').then(()=>reloadCron())" title="切换" style="width:28px;height:24px;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0">'+(t.enabled?'⏸':'▶')+'</button>'+
+'<button class="btn sm" onclick="showCronEdit('+i+')" title="修改" style="width:28px;height:24px;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0">✏️</button>'+
+'<button class="btn sm" onclick="apiPost(\'/dashboard/cron/'+i+'/run\').then(()=>reloadCron())" title="立即执行" style="width:28px;height:24px;display:inline-flex;align-items:center;justify-content:center;line-height:1;color:var(--green);padding:0">⏩</button>'+
+'<button class="btn sm" onclick="if(confirm(\'删除?\'))apiPost(\'/dashboard/cron/'+i+'/delete\').then(()=>reloadCron())" title="删除" style="width:28px;height:24px;display:inline-flex;align-items:center;justify-content:center;line-height:1;color:var(--red);padding:0">✕</button>'+
+'</td></tr>';
     }
     html+='</tbody></table>';
   }
@@ -481,7 +693,11 @@ function renderCronPage(el,data){
     '</div></div>'+
     '<div id="cronPreview" style="margin-top:6px;padding:4px 8px;background:var(--bg3);border-radius:var(--radius-sm);font-family:var(--mono);font-size:0.72rem;color:var(--accent)"></div>'+
     '<input id="cronSched" type="hidden" value="0 */30 * * * *">'+
+    '<input id="cronType" type="hidden" value="prompt">'+
     '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">任务内容</label>'+
+    '<div style="display:flex;gap:6px;margin-bottom:6px">'+
+    '<button id="cronTypePrompt" class="btn sm accent" onclick="switchCronType(\'prompt\')" style="flex:1">📝 文字指令</button>'+
+    '<button id="cronTypeShell" class="btn sm" onclick="switchCronType(\'shell\')" style="flex:1">💻 Shell命令</button></div>'+
     '<textarea id="cronCmd" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;outline:none;resize:vertical;min-height:60px;font-family:var(--mono)" placeholder="要执行的命令或消息内容"></textarea>'+
     '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">投递到</label>'+
     '<select id="cronDeliver" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none">'+
@@ -504,6 +720,19 @@ function renderCronPage(el,data){
     if(el2)el2.addEventListener('change',updateCronPreview);
   });
 }
+window.switchCronType=function(m){
+  const pb=document.getElementById('cronTypePrompt');
+  const sb=document.getElementById('cronTypeShell');
+  const h=document.getElementById('cronType');
+  if(!pb||!sb||!h)return;
+  if(m==='prompt'){
+    pb.className='btn sm accent';sb.className='btn sm';
+    h.value='prompt';
+  }else{
+    pb.className='btn sm';sb.className='btn sm accent';
+    h.value='shell';
+  }
+};
 window.switchCronMode=function(m){
   const t=document.getElementById('cronTimedPanel');
   const i=document.getElementById('cronIntervalPanel');
@@ -597,6 +826,7 @@ window.showCronAdd=function(){
   document.getElementById('cronName').value='';
   document.getElementById('cronCmd').value='';
   document.getElementById('cronDeliver').value='origin';
+  switchCronType('prompt');
   document.getElementById('cronHour').value='0';
   document.getElementById('cronMinute').value='0';
   document.getElementById('cronIntervalNum').value='30';
@@ -619,6 +849,7 @@ window.showCronEdit=async function(idx){
   document.getElementById('cronName').value=t.name||'';
   document.getElementById('cronCmd').value=t.command||t.content||'';
   document.getElementById('cronDeliver').value=t.deliver||'origin';
+  switchCronType(t.type==='prompt'?'prompt':'shell');
   // 尝试从cron表达式反推模式
   const sched=t.schedule||'';
   if(sched.match(/^\d+ \*\/\d+/)){
@@ -647,28 +878,66 @@ window.doAddCron=async function(){
   const n=document.getElementById('cronName').value.trim()||'未命名';
   const c=document.getElementById('cronSched').value||'0 */30 * * * *';
   const cmd=document.getElementById('cronCmd').value.trim()||'';
+  const tp=document.getElementById('cronType').value||'prompt';
   const dv_raw=document.getElementById('cronDeliver').value.trim()||'origin';
   const dt=document.getElementById('cronDeliverTarget');
   const target=dt&&dt.value?':'+dt.value:'';
   const dv=dv_raw+target;
+  const body={name:n,schedule:c,command:cmd,deliver:dv};
+  if(tp==='prompt')body.type='prompt';
   if(idx>=0){
-    // 编辑模式
-    await apiPost('/dashboard/cron/'+idx+'/update',{name:n,schedule:c,command:cmd,deliver:dv});
+    await apiPost('/dashboard/cron/'+idx+'/update',body);
   }else{
-    // 新建模式
-    await apiPost('/dashboard/cron/create',{name:n,schedule:c,command:cmd,deliver:dv});
+    await apiPost('/dashboard/cron/create',body);
   }
   document.getElementById('cronAddDlg').style.display='none';
   reloadCron();
 };
 window.reloadCron=async function(){
   const el=document.getElementById('pageContent');
-  el.innerHTML='<div class="loading">刷新中...</div>';
+  const tb=document.getElementById('cronTaskSection');
   try{
     const d=await api('/dashboard/engine/cron');
-    if(d.status==='ok')renderCronPage(el,d.data);
-    else el.innerHTML='<div class="error">加载失败</div>';
-  }catch(e){el.innerHTML='<div class="error">网络错误</div>';}
+    if(d.status==='ok'){
+      if(tb){
+        // 有表格了，只更新表格内的数据
+        const oldData=window._cronData||{};
+        window._cronData=d.data;
+        const tasks=d.data['任务列表']||[];
+        // 只更新表格行，不重绘整个页面
+        const rows=el.querySelectorAll('.hist-table tbody tr');
+        if(rows.length===tasks.length){
+          for(let i=0;i<tasks.length;i++){
+            const t=tasks[i];
+            const lr=t.last_run&&t.last_run!==0?new Date(t.last_run*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'—';
+            const st=t.enabled?'<span style="color:var(--green);display:inline-block;width:64px">🟢 启用</span>':'<span style="color:var(--fg3);display:inline-block;width:64px">🔴 暂停</span>';
+            const tg=t.enabled?'⏸':'▶';
+            const cells=rows[i].querySelectorAll('td');
+            if(cells.length>=7){
+              cells[5].innerHTML=st;
+              cells[6].innerHTML=lr;
+              const ops=cells[7].querySelectorAll('button');
+              if(ops.length>=1)ops[0].innerHTML=tg;
+            }
+          }
+          return;
+        }
+      }
+      renderCronPage(el,d.data);
+    }else el.innerHTML='<div class="error">加载失败</div>';
+  }catch(e){if(!tb)el.innerHTML='<div class="error">网络错误</div>';}
+};
+// 定时自动刷新cron页面（每5秒）
+let _cronRefreshTimer=null;
+window.startCronAutoRefresh=function(){
+  if(_cronRefreshTimer)return;
+  _cronRefreshTimer=setInterval(()=>{
+    const el=document.getElementById('pageContent');
+    if(el&&el.querySelector('.hist-table'))reloadCron();
+  },5000);
+};
+window.stopCronAutoRefresh=function(){
+  if(_cronRefreshTimer){clearInterval(_cronRefreshTimer);_cronRefreshTimer=null;}
 };
 
 // ─── Sessions Page ────
@@ -761,24 +1030,30 @@ async function renderConfig(el,d){
   }catch(e){}
 }
 
-// ─── 配置包页面 ────
+// ─── 配置包页面（卡片式布局）───
 async function renderProfiles(el,d){
   const pf=d.profiles||[];
-  let html='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 配置包</h3></div>';
-  html+='<div style="color:var(--fg2);font-size:0.75rem;margin-bottom:10px">每个配置包是一组独立的灵魂设定和技能。点包名查看详情。</div>';
+  let html='<div class="card"><div class="card-hd"><h3>\uD83D\uDCE6 配置包</h3></div>'+
+    '<div style="color:var(--fg2);font-size:0.75rem;margin-bottom:10px">每个配置包是一组独立的灵魂设定和技能。点击查看详情。</div>'+
+    '<div class="grid-2">';
   for(const p of pf){
-    const act=p.active?'<span style="color:var(--green);font-size:0.72rem">\u25C9 使用中</span>':'<span style="color:var(--fg3);font-size:0.72rem">\u25CB 未激活</span>';
-    const iCo=p.active?'\u2B50':'\uD83D\uDCE6';
-    html+='<div style="background:var(--bg2);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;border:1px solid '+(p.active?'var(--accent-border)':'var(--border)')+'">'+
+    const activeDot=p.active?'<span style="color:var(--green);font-size:0.9rem">\u25C9</span>':'<span style="color:var(--fg3);font-size:0.9rem">\u25CB</span>';
+    const label=p.active?'使用中':'未激活';
+    const soulPreview=esc(p.soul_preview||'');
+    const soulTrunc=soulPreview.length>40?soulPreview.substring(0,40)+'...':soulPreview||'<span style="color:var(--fg3)"><无></span>';
+    html+='<div class="card" style="margin-bottom:0">'+
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
-      '<strong style="color:var(--accent);font-size:0.9rem;cursor:pointer" onclick="navigate(\'profiles\',\''+esc(p.name)+'\')">'+iCo+' '+esc(p.name)+'</strong>'+act+'</div>'+
-      '<div class="row"><span class="l">灵魂</span><span class="v" style="font-size:0.72rem;color:var(--fg2)">'+esc(p.soul_preview||'<无>')+'</span></div>'+
-      '<div class="row"><span class="l">技能</span><span class="v">'+(p.skills_count||0)+' 个</span></div>'+
-      (p.active?'':'<div style="margin-top:8px"><button class="btn sm" onclick="loadProfile(\''+esc(p.name)+'\')">加载</button></div>')+
-      '<div style="margin-top:6px"><button class="btn sm" onclick="navigate(\'profiles\',\''+esc(p.name)+'\')">\uD83D\uDCC2 查看详情</button></div>'+
-      '</div>';
+        '<div><span style="font-size:0.9rem;font-weight:600;color:var(--accent);cursor:pointer" onclick="navigate(\'profiles\',\''+esc(p.name)+'\')">'+esc(p.name)+'</span>'+
+        ' <span style="font-size:0.72rem;color:var(--fg3)">'+activeDot+' '+label+'</span></div>'+
+        '<div><span style="font-size:0.72rem;color:var(--fg2)">\uD83D\uDCDA '+(p.skills_count||0)+' 技能</span></div>'+
+      '</div>'+
+      '<div style="font-size:0.78rem;color:var(--fg2);margin-bottom:8px;line-height:1.4">'+soulTrunc+'</div>'+
+      '<div style="display:flex;gap:6px">'+
+        '<button class="btn sm" onclick="navigate(\'profiles\',\''+esc(p.name)+'\')">查看详情</button>'+
+        (p.active?'':'<button class="btn sm accent" onclick="loadProfile(\''+esc(p.name)+'\')">加载</button>')+
+      '</div></div>';
   }
-  html+='</div>';
+  html+='</div></div>';
   el.innerHTML=html;
 }
 
@@ -861,6 +1136,9 @@ async function renderModule(el,modId,statusData){
       }else if(modId==='cron'){
         // 定时任务页面 — 用 engine 数据渲染
         renderCronPage(el,d.data);
+        return;
+      }else if(modId==='channels'){
+        renderChannelsPage(el,d.data);
         return;
       }else{
       for(const [k,v] of Object.entries(d)){
