@@ -2435,7 +2435,11 @@ async fn handle_dashboard_sessions(
                     if !closed { active_count += 1; }
                     if shared { shared_count += 1; }
 
-                    let ago = if last_active == 0 { 0 } else { (uptime as u64).saturating_sub(last_active) };
+                    let now_ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let ago = if last_active == 0 { 0 } else { now_ts.saturating_sub(last_active) };
                     let last_active_human = if ago < 60 { format!("{}秒前", ago) }
                         else if ago < 3600 { format!("{}分钟前", ago / 60) }
                         else if ago < 86400 { format!("{}小时前", ago / 3600) }
