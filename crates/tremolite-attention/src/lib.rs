@@ -176,6 +176,7 @@ pub struct MultiScaleAttention {
     /// 上一次缓存的 query embedding（避免同一轮重复嵌入）
     cached_query_embedding: Option<Vec<f32>>,
     cached_query_text: String,
+    stats_path: Option<std::path::PathBuf>,
 }
 
 impl Default for MultiScaleAttention {
@@ -192,6 +193,7 @@ impl MultiScaleAttention {
             embedding: None,
             cached_query_embedding: None,
             cached_query_text: String::new(),
+            stats_path: None,
         }
     }
 
@@ -203,6 +205,16 @@ impl MultiScaleAttention {
             api_base, model
         );
         self
+    }
+
+    /// 配置 stats 文件路径
+    pub fn with_stats_path(mut self, path: &str) -> Self {
+        self.stats_path = Some(std::path::PathBuf::from(path));
+        self
+    }
+
+    pub fn set_stats_path(&mut self, path: &str) {
+        self.stats_path = Some(std::path::PathBuf::from(path));
     }
 
     /// 对输入文本执行四层注意力扫描
@@ -317,6 +329,40 @@ impl MultiScaleAttention {
         if self.attention_history.len() > self.max_history {
             self.attention_history.remove(0);
         }
+
+        // 持久化 stats 到文件
+        if let Some(ref stats_path) = self.stats_path {
+            let hist_count = self.attention_history.len();
+            let total_scan = self.attention_history.iter()
+                .map(|r| r.synthesis.total_tokens_scanned)
+                .sum::<usize>();
+            let top_entities: Vec<String> = result.synthesis.top_entities.iter()
+                .take(5)
+                .map(|(e, _)| e.clone())
+                .collect();
+            let top_score = result.synthesis.top_regions.first()
+                .map(|(_, _, s)| *s)
+                .unwrap_or(0.0);
+            let timestamp = result.macro_blocks.first()
+                .map(|b| b.timestamp)
+                .unwrap_or_else(|| std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs());
+            let stats = serde_json::json!({
+                "history_count": hist_count,
+                "total_tokens_scanned": total_scan,
+                "last_scan": {
+                    "timestamp": timestamp,
+                    "top_score": (top_score * 100.0).round() / 100.0,
+                    "top_entities": top_entities,
+                },
+            });
+            if let Ok(json_str) = serde_json::to_string_pretty(&stats) {
+                let _ = std::fs::write(stats_path, json_str);
+            }
+        }
+
         result
     }
 

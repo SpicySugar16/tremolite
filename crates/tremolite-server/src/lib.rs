@@ -1051,6 +1051,19 @@ async fn handle_engine_mod(
                 }
             }
 
+            // 读取 attention stats
+            let stats_path = profile_dir.join("attention_stats.json");
+            let stats = std::fs::read_to_string(&stats_path).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .unwrap_or(serde_json::json!({
+                    "history_count": 0,
+                    "total_tokens_scanned": 0,
+                    "last_scan": null,
+                }));
+            let history_count = stats.get("history_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let total_scanned = stats.get("total_tokens_scanned").and_then(|v| v.as_u64()).unwrap_or(0);
+            let last_scan = stats.get("last_scan").cloned().unwrap_or(serde_json::Value::Null);
+
             serde_json::json!({
                 "模块ID": "attention",
                 "版本": "0.2.0",
@@ -1070,9 +1083,9 @@ async fn handle_engine_mod(
                     {"name": "Micro", "label": "微观精炼", "window": 50, "stride": 10, "max_blocks": 5, "description": "微观细节，提取精确信息"},
                     {"name": "Synthesis", "label": "综合合成", "window": 0, "stride": 0, "max_blocks": 0, "description": "跨尺度汇总，提炼结构知识"},
                 ],
-                "history_count": 0,
-                "last_scan": null,
-                "total_tokens_scanned": 0,
+                "history_count": history_count,
+                "last_scan": last_scan,
+                "total_tokens_scanned": total_scanned,
             })
         }
         "skill" => {

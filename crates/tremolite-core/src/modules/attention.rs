@@ -26,6 +26,9 @@ impl AttentionModule {
     pub fn summary(&self) -> &str { &self.last_summary }
     pub fn engine(&self) -> &MultiScaleAttention { &self.engine }
     pub fn last_result(&self) -> Option<&AttentionResult> { self.engine.last_result() }
+    pub fn set_stats_path(&mut self, path: &str) {
+        self.engine.set_stats_path(path);
+    }
 }
 
 impl Module for AttentionModule {
@@ -65,4 +68,5 @@ impl Module for AttentionModule {
     }
 
     fn as_any(&self) -> Option<&dyn Any> { Some(self) }
+    fn as_any_mut(&mut self) -> Option<&mut dyn Any> { Some(self) }
 }

@@ -243,6 +243,29 @@ fn main() {
         }
     }
     let _ = engine.register_module(Box::new(attn));
+
+    // 注入 attention stats 路径——让每次扫描后持久化统计信息
+    {
+        let attn_stats_path = profile_dir.join("attention_stats.json");
+        let attn_stats_str = attn_stats_path.to_string_lossy().to_string();
+        let _ = engine.modules.with_module_mut("attention", |m| {
+            if let Some(a) = m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::AttentionModule>())
+            {
+                a.set_stats_path(&attn_stats_str);
+            }
+        });
+        // 生成初始 stats 文件（如果不存在）
+        if !attn_stats_path.exists() {
+            let initial = serde_json::json!({
+                "history_count": 0,
+                "total_tokens_scanned": 0,
+                "last_scan": null,
+            });
+            let _ = std::fs::write(&attn_stats_path, serde_json::to_string_pretty(&initial).unwrap());
+        }
+    }
+
     let _ = engine.register_module(Box::new(SkillModule::new(d.clone())));
     let _ = engine.register_module(Box::new(KanbanModule::new(d.clone())));
     let _ = engine.register_module(Box::new(ReflectionModule::new(5)));
