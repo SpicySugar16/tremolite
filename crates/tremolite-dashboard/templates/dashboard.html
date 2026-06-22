@@ -942,8 +942,6 @@ window.stopCronAutoRefresh=function(){
 
 // ─── Sessions Page ────
 async function renderSessions(el,d){
-  const ec=d.emotion||{};
-  const mc=d.memory||{};
   let html='<div class="card"><div class="card-hd"><h3>\u2630 会话</h3></div><div class="loading">加载中...</div></div>';
   el.innerHTML=html;
   try{
@@ -951,25 +949,50 @@ async function renderSessions(el,d){
     if(r.status==='ok'){
       const act=r.active_session||{};
       const files=r.session_files||[];
-      html='<div class="card"><div class="card-hd"><h3>\u2630 会话</h3></div>'+
-        '<div class="grid-2">'+
-        '<div class="card"><div class="card-hd"><h3>当前</h3></div>'+
+      const cfg=r.config||{};
+      const stats=r.stats||{};
+      
+      html='<div class="grid-2">'+
+        '<div class="card"><div class="card-hd"><h3>当前会话</h3></div>'+
         '<div class="row"><span class="l">平台</span><span class="v">'+(act.platform||'-')+'</span></div>'+
         '<div class="row"><span class="l">用户</span><span class="v">'+(act.user||'-')+'</span></div>'+
-        '<div class="row"><span class="l">状态</span><span class="v">'+(act.state||'-')+'</span></div>'+
+        '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+(act.state||'-')+'</span></span></div>'+
         '<div class="row"><span class="l">运行</span><span class="v">'+(r.uptime_human?r.uptime_human.hours+'h '+r.uptime_human.minutes+'m':'?')+'</span></div></div>'+
-        '<div class="card"><div class="card-hd"><h3>概览</h3></div>'+
-        '<div class="row"><span class="l">会话文件</span><span class="v">'+files.length+'</span></div>'+
-        '<div class="row"><span class="l">记忆</span><span class="v">'+(mc.total_entries||0)+' 条</span></div>'+
-        '<div class="row"><span class="l">情绪</span><span class="v">'+(ec.display||'?')+'</span></div></div></div>';
+        
+        '<div class="card"><div class="card-hd"><h3>存储概览</h3></div>'+
+        '<div class="row"><span class="l">会话文件</span><span class="v">'+files.length+' 个</span></div>'+
+        '<div class="row"><span class="l">占用空间</span><span class="v">'+(stats.total_size_human||'?')+'</span></div>'+
+        '<div class="row"><span class="l">最大文件</span><span class="v">'+(stats.largest_file||'-')+'</span></div>'+
+        '<div class="row"><span class="l">配置来源</span><span class="v" style="font-size:0.65rem;font-family:var(--mono);color:var(--fg3)">'+
+        esc(cfg.config_path||'')+'</span></div></div></div>';
+      
+      // 超时配置卡片
+      html+='<div class="card"><div class="card-hd"><h3>⏱ 会话超时配置</h3></div>'+
+        '<div class="row"><span class="l">闲置冷却</span><span class="v">'+(cfg.idle_timeout_human||'300秒')+'</span></div>'+
+        '<div class="row"><span class="l">清理保留</span><span class="v">'+(cfg.cleanup_timeout_human||'30天')+'</span></div>'+
+        '<div class="row"><span class="l">环容量</span><span class="v">'+(cfg.max_rings||20)+' 条</span></div></div>';
+      
+      // 会话文件列表
       if(files.length>0){
-        html+='<div class="card"><div class="card-hd"><h3>会话文件</h3></div><div style="font-size:0.72rem">';
-        for(const f of files.slice(0,10)){
-          const sz=f.bytes>1024?(f.bytes/1024).toFixed(1)+'KB':f.bytes+'B';
-          html+='<div class="row"><span class="l">'+esc(f.name)+'</span><span class="v">'+sz+'</span></div>';
+        html+='<div class="card"><div class="card-hd"><h3>📁 会话文件</h3></div>'+
+          '<div style="font-size:0.72rem;margin-bottom:6px;color:var(--fg2)">共 '+files.length+' 个文件 · 点击行可查看详情</div>'+
+          '<table style="width:100%;border-collapse:collapse">'+
+          '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg3);font-size:0.7rem">'+
+          '<th style="padding:4px 8px;text-align:left">名称</th>'+
+          '<th style="padding:4px 8px;text-align:right">大小</th>'+
+          '<th style="padding:4px 8px;text-align:right">最后活跃</th></tr></thead><tbody>';
+        for(var fi=0; fi<files.length; fi++){
+          var f=files[fi];
+          html+='<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="console.log(\''+esc(f.name)+'\')">'+
+            '<td style="padding:4px 8px;font-family:var(--mono);font-size:0.75rem;color:var(--fg)">'+esc(f.name)+'</td>'+
+            '<td style="padding:4px 8px;text-align:right;font-size:0.72rem;color:var(--fg2)">'+(f.size_human||f.bytes+'B')+'</td>'+
+            '<td style="padding:4px 8px;text-align:right;font-size:0.7rem;color:var(--fg3)">'+(f.last_active_human||'-')+'</td></tr>';
         }
-        html+='</div></div>';
+        html+='</tbody></table></div>';
+      }else{
+        html+='<div class="card"><div style="color:var(--fg3);font-size:0.78rem;padding:16px 0;text-align:center">暂无会话文件。</div></div>';
       }
+      
       el.innerHTML=html;
     }
   }catch(e){}
