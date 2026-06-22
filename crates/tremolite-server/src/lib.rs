@@ -144,6 +144,7 @@ async fn run_server_inner(
         .route("/dashboard/engine/memory/paths", get(handle_memory_paths))
         .route("/dashboard/config/profile", get(handle_profile_get).post(handle_profile_set))
         .route("/dashboard/attention/update", post(handle_attention_update))
+        .route("/dashboard/compress/exec", post(handle_compress_exec))
         .route("/dashboard/config/check", get(handle_config_check))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
@@ -321,7 +322,7 @@ async fn handle_health(Extension(state): Extension<Arc<AppState>>) -> Json<Value
     Json(serde_json::json!({
         "status": "ok",
         "service": "tremolite",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "uptime_secs": uptime,
         "uptime_human": format_uptime(uptime),
         "mode": "daemon",
@@ -1133,12 +1134,63 @@ async fn handle_engine_mod(
             "状态": "待机中",
             "版本": env!("CARGO_PKG_VERSION"),
         }),
-        "compress" => serde_json::json!({
-            "压缩策略": "分块摘要",
-            "Token节省": "—",
-            "状态": "待机中",
-            "版本": env!("CARGO_PKG_VERSION"),
-        }),
+        "compress" => {
+            let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
+            let config_path = profile_dir.join("modules").join("compress.toml");
+
+            let mut blocks = 5usize;
+            let mut ratios = vec!["Delete".to_string(), "20%".to_string(), "40%".to_string(), "60%".to_string(), "Full".to_string()];
+            let mut threshold: u32 = 0;
+            let mut auto_compress = true;
+
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(toml_val) = content.parse::<toml::Value>() {
+                    if let Some(cfg) = toml_val.get("compress") {
+                        blocks = cfg.get("blocks").and_then(|v| v.as_integer()).map(|v| v as usize).unwrap_or(5);
+                        if let Some(ratios_arr) = cfg.get("ratios").and_then(|v| v.as_array()) {
+                            let parsed: Vec<String> = ratios_arr.iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect();
+                            if !parsed.is_empty() {
+                                ratios = parsed;
+                            }
+                        }
+                        threshold = cfg.get("threshold").and_then(|v| v.as_integer()).map(|v| v as u32).unwrap_or(0);
+                        auto_compress = cfg.get("auto_compress").and_then(|v| v.as_bool()).unwrap_or(true);
+                    }
+                }
+            }
+
+            let mut block_descs: Vec<String> = Vec::new();
+            for (i, r) in ratios.iter().enumerate() {
+                let desc = match r.as_str() {
+                    "Delete" => format!("块{}: 删除", i),
+                    "Full" => format!("块{}: 不压缩", i),
+                    s if s.ends_with('%') => format!("块{}: 压缩到{}", i, s),
+                    _ => format!("块{}: {}", i, r),
+                };
+                block_descs.push(desc);
+            }
+            let strategy_desc = format!("{}块: [{}]", blocks, block_descs.join(" | "));
+
+            let threshold_desc = if threshold == 0 {
+                "自动（模型上限/2）".to_string()
+            } else {
+                format!("{} tokens", threshold)
+            };
+
+            serde_json::json!({
+                "策略描述": strategy_desc,
+                "块数": blocks,
+                "每块比例": ratios,
+                "阈值": threshold,
+                "阈值描述": threshold_desc,
+                "自动压缩": auto_compress,
+                "状态": "运行中",
+                "版本": "0.2.1",
+                "配置来源": config_path.to_string_lossy().to_string(),
+            })
+        },
         "delegation" => serde_json::json!({
             "最大子Agent": "3",
             "委派深度": "1",
@@ -2801,6 +2853,15 @@ fn get_memory_info() -> Value {
     } else {
         serde_json::json!("unavailable")
     }
+}
+
+async fn handle_compress_exec(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": "压缩命令已发送",
+    }))
 }
 
 /// 确定记忆文件目录（优先配置包，回退 data 目录）

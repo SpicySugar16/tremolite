@@ -2964,7 +2964,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-attention"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3031,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "tremolite-compress"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",

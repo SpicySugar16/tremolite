@@ -347,7 +347,7 @@ impl Module for CompressModule {
     }
 
     fn version(&self) -> &str {
-        "0.2.0"
+        "0.2.1"
     }
 
     fn provides(&self) -> Vec<Capability> {

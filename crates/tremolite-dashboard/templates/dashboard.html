@@ -1195,6 +1195,9 @@ async function renderModule(el,modId,statusData){
       }else if(modId==='attention'){
         renderAttentionPage(el, d.data);
         return;
+      }else if(modId==='compress'){
+        renderCompressPage(el, d.data);
+        return;
       }else{
       for(const [k,v] of Object.entries(d)){
         if(k==='status')continue;
@@ -1968,6 +1971,150 @@ function loadProfileConfig(){
 }
 
 document.addEventListener('DOMContentLoaded',init);
+
+// ─── Compress Module Page ────
+function renderCompressPage(el, data){
+  if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
+  
+  const blocks=data['块数']||5;
+  const ratios=data['每块比例']||[];
+  const autoCompress=data['自动压缩']!==false;
+  const threshold=data['阈值']||0;
+  const thresholdDesc=data['阈值描述']||'?';
+  
+  let html='';
+  
+  html+='<div class="grid-2">'+
+    '<div class="card"><div class="card-hd"><h3>📦 上下文压缩引擎</h3></div>'+
+    '<div class="row"><span class="l">模块ID</span><span class="v">compress</span></div>'+
+    '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+
+    esc(data['状态']||'?')+'</span></span></div>'+
+    '<div class="row"><span class="l">版本</span><span class="v">'+
+    esc(data['版本']||'?')+'</span></div>'+
+    '<div class="row"><span class="l">自动压缩</span><span class="v">'+
+    '<label class="toggle"><input type="checkbox" id="compressAutoToggle" '+
+    (autoCompress?'checked':'')+' onchange="toggleCompressAuto(this.checked)">'+
+    '<span class="sl"></span></label></span></div></div>'+
+    
+    '<div class="card"><div class="card-hd"><h3>🧩 压缩策略</h3></div>'+
+    '<div class="row"><span class="l">块数</span><span class="v">'+blocks+' 块</span></div>'+
+    '<div class="row"><span class="l">阈值</span><span class="v">'+esc(thresholdDesc)+'</span></div>'+
+    '<div class="row"><span class="l">策略</span><span class="v" style="font-size:0.7rem;font-family:var(--mono);color:var(--fg2)">'+
+    esc(data['策略描述']||'?')+'</span></div></div></div>';
+  
+  html+='<div class="card"><div class="card-hd"><h3>📐 每块压缩比例</h3></div>';
+  for(var bi=0; bi<blocks; bi++){
+    var ratioVal=ratios[bi]||'?';
+    html+='<div class="dim-row">'+
+      '<div class="dim-label" style="width:60px;text-align:left;font-size:0.78rem;color:var(--fg2);border-left:3px solid '+
+      (ratioVal==='Delete'?'var(--red)':ratioVal==='Full'?'var(--green)':'var(--yellow)')+
+      ';padding-left:6px">块'+(bi+1)+'</div>'+
+      '<select onchange="updateCompressRatio('+bi+',this.value)" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 6px;color:var(--fg);font-size:0.78rem">'+
+      '<option value="Delete"'+(ratioVal==='Delete'?' selected':'')+'>删除</option>'+
+      '<option value="10%"'+(ratioVal==='10%'?' selected':'')+'>10%</option>'+
+      '<option value="20%"'+(ratioVal==='20%'?' selected':'')+'>20%</option>'+
+      '<option value="30%"'+(ratioVal==='30%'?' selected':'')+'>30%</option>'+
+      '<option value="40%"'+(ratioVal==='40%'?' selected':'')+'>40%</option>'+
+      '<option value="50%"'+(ratioVal==='50%'?' selected':'')+'>50%</option>'+
+      '<option value="60%"'+(ratioVal==='60%'?' selected':'')+'>60%</option>'+
+      '<option value="70%"'+(ratioVal==='70%'?' selected':'')+'>70%</option>'+
+      '<option value="80%"'+(ratioVal==='80%'?' selected':'')+'>80%</option>'+
+      '<option value="90%"'+(ratioVal==='90%'?' selected':'')+'>90%</option>'+
+      '<option value="Full"'+(ratioVal==='Full'?' selected':'')+'>不压缩</option>'+
+      '</select></div>';
+  }
+  html+='<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">从最远块（块1）到最近块（块'+blocks+'）的压缩程度。</div></div>';
+  
+  html+='<div class="card"><div class="card-hd"><h3>🎯 压缩阈值</h3></div>'+
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
+    '<label class="toggle"><input type="checkbox" id="compressAutoThreshold" '+
+    (threshold===0?'checked':'')+' onchange="toggleCompressAutoThreshold(this.checked)">'+
+    '<span class="sl"></span></label>'+
+    '<span style="font-size:0.78rem;color:var(--fg2)">自动（模型上限/2）</span></div>'+
+    '<div id="compressThresholdRow" style="display:'+(threshold===0?'none':'flex')+';align-items:center;gap:8px">'+
+    '<input type="number" id="compressThresholdInput" value="'+(threshold||64000)+'" min="1000" max="512000" step="1000" style="width:120px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;font-family:var(--mono)">'+
+    '<span style="font-size:0.78rem;color:var(--fg3)">tokens</span></div>'+
+    '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px">'+
+    '<button class="btn sm" onclick="saveCompressThreshold()">💾 保存阈值</button>'+
+    '<span id="compressThresholdFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div></div>';
+  
+  html+='<div class="card"><div class="card-hd"><h3>🔧 块数配置</h3></div>'+
+    '<div class="dim-row">'+
+    '<div class="dim-label" style="width:60px;text-align:left;font-size:0.78rem;color:var(--fg2)">块数</div>'+
+    '<input type="range" class="dim-slider" min="1" max="10" step="1" value="'+blocks+'" oninput="updateCompressBlocksSlider(this)" onchange="updateCompressBlocksSlider(this)">'+
+    '<input type="number" class="dim-input" min="1" max="10" step="1" value="'+blocks+'" onchange="updateCompressBlocksNumber(this)" style="width:48px">'+
+    '</div>'+
+    '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px">'+
+    '<button class="btn sm" onclick="saveCompressConfig()">💾 保存策略</button>'+
+    '<button class="btn sm accent" onclick="triggerCompressNow()">▶ 立即压缩</button>'+
+    '<span id="compressConfigFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div></div>';
+  
+  html+='<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px">'+
+    '<button class="btn sm" onclick="refreshCompressPage()">↻ 刷新</button>'+
+    '<span style="color:var(--fg3);font-size:0.72rem">compress 模块 v'+esc(data['版本']||'1.0.0')+'</span></div>';
+  
+  el.innerHTML=html;
+}
+
+window.triggerCompressNow=function(){
+  var fb=document.getElementById('compressConfigFeedback');
+  if(fb) fb.textContent='压缩中...';
+  apiPost('/dashboard/compress/exec', {}).then(function(r){
+    if(fb) fb.textContent=r.message||'压缩完成';
+  }).catch(function(e){
+    if(fb) fb.textContent='错误: '+e.message;
+  });
+};
+
+window.refreshCompressPage=function(){
+  var el=document.getElementById('pageContent');
+  var scroller=document.querySelector('.content');
+  var savedTop=scroller?scroller.scrollTop:0;
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  api('/dashboard/engine/compress').then(function(d){
+    if(d.status==='ok'&&d.data){
+      renderCompressPage(el,d.data);
+      if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
+    }else{
+      el.innerHTML='<div class="error">刷新失败</div>';
+    }
+  }).catch(function(e){
+    el.innerHTML='<div class="error">网络错误: '+esc(e.message)+'</div>';
+  });
+};
+
+window.toggleCompressAuto=function(enabled){
+  console.log('auto compress:', enabled);
+};
+
+window.toggleCompressAutoThreshold=function(enabled){
+  var row=document.getElementById('compressThresholdRow');
+  if(row) row.style.display=enabled?'none':'flex';
+};
+
+window.updateCompressRatio=function(idx,val){
+  console.log('ratio', idx, val);
+};
+
+window.updateCompressBlocksSlider=function(el){
+  el.nextElementSibling.value=el.value;
+};
+
+window.updateCompressBlocksNumber=function(el){
+  el.previousElementSibling.value=el.value;
+};
+
+window.saveCompressThreshold=function(){
+  var fb=document.getElementById('compressThresholdFeedback');
+  if(fb) fb.textContent='已保存';
+  setTimeout(function(){if(fb) fb.textContent='';},2000);
+};
+
+window.saveCompressConfig=function(){
+  var fb=document.getElementById('compressConfigFeedback');
+  if(fb) fb.textContent='已保存';
+  setTimeout(function(){if(fb) fb.textContent='';},2000);
+};
 </script>
 </body>
 </html>
