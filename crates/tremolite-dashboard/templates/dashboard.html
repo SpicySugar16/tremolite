@@ -996,7 +996,7 @@ async function renderSessions(el,d){
           html+='<tr style="border-bottom:1px solid var(--bg3)">'+
             '<td style="padding:4px 8px;font-family:var(--mono);font-size:0.75rem;color:var(--fg)">'+esc(s.id)+'</td>'+
             '<td style="padding:4px 8px;text-align:center"><span style="color:'+(s.status==='活跃'?'var(--green)':'var(--fg3)')+'">'+(s.status||'?')+'</span></td>'+
-            '<td style="padding:4px 8px;text-align:center">'+(s.shared?'<span style="color:var(--accent)">✓</span>':'✕')+'</td>'+
+            '<td style="padding:4px 8px;text-align:center"><span style="cursor:pointer;color:'+(s.shared?'var(--accent)':'var(--fg3)')+'" onclick="toggleSessionShare(\''+esc(s.id)+'\')">'+(s.shared?'✓':'✕')+'</span></td>'+
             '<td style="padding:4px 8px;text-align:right;font-size:0.7rem;color:var(--fg3)">'+(s.last_active_human||'-')+'</td></tr>';
         }
         html+='</tbody></table></div>';
@@ -1048,6 +1048,16 @@ window.refreshSessionPage=async function(){
     if(r.status==='ok'){
       await renderSessions(el, {});
       if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
+    }
+  }catch(e){}
+};
+
+// ─── 切换会话共享状态 ────
+window.toggleSessionShare=async function(sessionId){
+  try{
+    var r=await apiPost('/dashboard/session/toggle_share', {session_id: sessionId});
+    if(r.status==='ok'){
+      refreshSessionPage();
     }
   }catch(e){}
 };

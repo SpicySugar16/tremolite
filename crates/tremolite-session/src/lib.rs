@@ -29,7 +29,7 @@ impl SessionState {
         Self {
             id,
             last_active: now_secs(),
-            shared: false,
+            shared: true,
             closed: false,
             closed_at: None,
         }

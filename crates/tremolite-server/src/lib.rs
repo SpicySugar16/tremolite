@@ -146,6 +146,7 @@ async fn run_server_inner(
         .route("/dashboard/attention/update", post(handle_attention_update))
         .route("/dashboard/compress/exec", post(handle_compress_exec))
         .route("/dashboard/session/config", post(handle_session_config_save))
+        .route("/dashboard/session/toggle_share", post(handle_session_toggle_share))
         .route("/dashboard/config/check", get(handle_config_check))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
@@ -2975,6 +2976,36 @@ async fn handle_session_config_save(
     match std::fs::write(&config_path, content) {
         Ok(_) => Json(serde_json::json!({"status": "ok", "message": "配置已保存"})),
         Err(e) => Json(serde_json::json!({"status": "error", "message": format!("保存失败: {}", e)})),
+    }
+}
+
+async fn handle_session_toggle_share(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    if session_id.is_empty() {
+        return Json(serde_json::json!({"status": "error", "message": "缺少 session_id 参数"}));
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let state_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("sessions").join("session_state.json");
+    
+    let mut data = read_json_file(&state_path);
+    let mut new_shared = true;
+    if let Some(sessions) = data.get_mut("sessions").and_then(|v| v.as_object_mut()) {
+        if let Some(s) = sessions.get_mut(session_id) {
+            if let Some(obj) = s.as_object_mut() {
+                let current = obj.get("shared").and_then(|v| v.as_bool()).unwrap_or(true);
+                new_shared = !current;
+                obj.insert("shared".into(), serde_json::json!(new_shared));
+            }
+        }
+    }
+    match write_json_file(&state_path, &data) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "shared": new_shared, "message": "已切换"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": e})),
     }
 }
 
