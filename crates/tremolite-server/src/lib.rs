@@ -37,6 +37,9 @@ struct AppState {
     // 通道注册表（共享引用，用于查询已知目标）
     #[allow(dead_code)]
     channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
+    // 模块注册表——用于访问引擎内模块
+    #[allow(dead_code)]
+    modules: Option<tremolite_core::module::ModuleRegistry>,
 }
 
 impl AppState {
@@ -84,8 +87,9 @@ pub async fn run_server(
     addr: &str,
     profile_name: &str,
     channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
+    modules: Option<tremolite_core::module::ModuleRegistry>,
 ) -> Result<(), String> {
-    run_server_inner(inbound_tx, pending_results, addr, profile_name, channel_registry).await
+    run_server_inner(inbound_tx, pending_results, addr, profile_name, channel_registry, modules).await
 }
 
 async fn run_server_inner(
@@ -94,6 +98,7 @@ async fn run_server_inner(
     addr: &str,
     profile_name: &str,
     channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
+    modules: Option<tremolite_core::module::ModuleRegistry>,
 ) -> Result<(), String> {
     let state = Arc::new(AppState {
         inbound_tx,
@@ -105,6 +110,7 @@ async fn run_server_inner(
         active_connections: AtomicU64::new(0),
         profile_name: profile_name.to_string(),
         channel_registry,
+        modules,
     });
 
     let router = Router::new()
@@ -147,6 +153,7 @@ async fn run_server_inner(
         .route("/dashboard/compress/exec", post(handle_compress_exec))
         .route("/dashboard/session/config", post(handle_session_config_save))
         .route("/dashboard/session/toggle_share", post(handle_session_toggle_share))
+        .route("/dashboard/session/activate", post(handle_session_activate))
         .route("/dashboard/config/check", get(handle_config_check))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
@@ -1685,7 +1692,7 @@ async fn handle_channels_manage(
     let data: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    Json(serde_json::json!({"status":"ok","data":data}))
+    Json(serde_json::json!({"status":"ok","data":data,"version":"0.3.0"}))
 }
 
 async fn handle_channels_save(
@@ -1722,14 +1729,6 @@ async fn handle_channels_sync_config(
         let ch_type = ch.get("type").and_then(|v| v.as_str()).unwrap_or("");
         channels_toml.push_str(&format!("\n[channels.{}]\n", name));
         match ch_type {
-            "NapCat" => {
-                let ws_url = ch.get("ws_url").and_then(|v| v.as_str()).unwrap_or("");
-                let broadcast_target = ch.get("broadcast_target").and_then(|v| v.as_str()).unwrap_or("");
-                channels_toml.push_str(&format!("type = \"NapCat\"\nws_url = \"{}\"\n", ws_url));
-                if !broadcast_target.is_empty() {
-                    channels_toml.push_str(&format!("broadcast_target = \"{}\"\n", broadcast_target));
-                }
-            }
             "QqBot" => {
                 let app_id = ch.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
                 let client_secret = ch.get("client_secret").and_then(|v| v.as_str()).unwrap_or("");
@@ -2402,6 +2401,16 @@ async fn handle_dashboard_sessions(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
     let uptime = state.uptime_secs();
+
+    // 每次查看 session 列表时触发冷却检查——冷却不依赖消息驱动
+    let _ = state.modules.as_ref().map(|mods| {
+        mods.with_module_mut("session", |m| {
+            m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::SessionModule>())
+                .map(|sm| sm.reap_and_save())
+        })
+    });
+
     let home = std::env::var("HOME").unwrap_or_default();
     let tremolite_dir = std::path::Path::new(&home).join(".tremolite");
 
@@ -2433,6 +2442,7 @@ async fn handle_dashboard_sessions(
                     let closed = s.get("closed").and_then(|v| v.as_bool()).unwrap_or(false);
                     let shared = s.get("shared").and_then(|v| v.as_bool()).unwrap_or(false);
                     let last_active = s.get("last_active").and_then(|v| v.as_u64()).unwrap_or(0);
+
                     if !closed { active_count += 1; }
                     if shared { shared_count += 1; }
 
@@ -2492,6 +2502,7 @@ async fn handle_dashboard_sessions(
             "shared": shared_count,
             "config_source": config_path.to_string_lossy().to_string(),
         },
+        "version": "0.3.0",
         "config": {
             "idle_timeout": idle_timeout,
             "idle_timeout_human": idle_human,
@@ -3006,6 +3017,30 @@ async fn handle_session_toggle_share(
     match write_json_file(&state_path, &data) {
         Ok(_) => Json(serde_json::json!({"status": "ok", "shared": new_shared, "message": "已切换"})),
         Err(e) => Json(serde_json::json!({"status": "error", "message": e})),
+    }
+}
+
+async fn handle_session_activate(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    if session_id.is_empty() {
+        return Json(serde_json::json!({"status": "error", "message": "缺少 session_id 参数"}));
+    }
+
+    let result: Option<Result<String, String>> = state.modules.as_ref().and_then(|mods| {
+        mods.with_module_mut("session", |m| {
+            m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::SessionModule>())
+                .map(|sm| sm.activate_session(session_id))
+        }).flatten()
+    });
+
+    match result {
+        Some(Ok(msg)) => Json(serde_json::json!({"status": "ok", "message": msg})),
+        Some(Err(e)) => Json(serde_json::json!({"status": "error", "message": e})),
+        None => Json(serde_json::json!({"status": "error", "message": "模块不可用"})),
     }
 }
 

@@ -6,6 +6,12 @@
 /// 生命周期分两层：
 ///   冷却（idle 超时）→ 冻结状态，数据保留，不再活跃
 ///   清理（closed 超时）→ 真正删除，通知 MemoryModule 回收 L1
+///
+/// 通道（channel）与 session 的依赖关系：
+/// - 每个 session 属于一个消息通道（http / ws / cron / webhook 等），记录在 SessionState.channel
+/// - 同一通道同时只能有一个活跃 session
+/// - 激活某 session 时，同通道其他活跃 session 会自动关闭
+/// - 不同通道的 session 互不干扰（http 和 ws 可以同时活跃）
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +21,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {
     pub id: String,
+    /// 来源通道（http / ws / cron / webhook 等）——同一通道同时只能有一个活跃session
+    #[serde(default)]
+    pub channel: String,
     pub last_active: u64,
     /// 是否允许其他 session 窥探
     pub shared: bool,
@@ -25,9 +34,10 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    pub fn new(id: String) -> Self {
+    pub fn new(id: String, channel: String) -> Self {
         Self {
             id,
+            channel,
             last_active: now_secs(),
             shared: true,
             closed: false,
@@ -103,10 +113,20 @@ impl SessionManager {
         self.cleanup_timeout = secs;
     }
 
-    pub fn get_or_create(&mut self, id: &str) -> &mut SessionState {
+    /// 获取闲置冷却超时（秒）
+    pub fn idle_timeout_secs(&self) -> u64 {
+        self.idle_timeout
+    }
+
+    /// 获取清理超时（秒）
+    pub fn cleanup_timeout_secs(&self) -> u64 {
+        self.cleanup_timeout
+    }
+
+    pub fn get_or_create(&mut self, id: &str, channel: &str) -> &mut SessionState {
         self.sessions
             .entry(id.to_string())
-            .or_insert_with(|| SessionState::new(id.to_string()))
+            .or_insert_with(|| SessionState::new(id.to_string(), channel.to_string()))
             .touch();
         self.sessions.get_mut(id).unwrap()
     }
@@ -145,6 +165,24 @@ impl SessionManager {
             self.sessions.remove(id);
         }
         stale
+    }
+
+    /// 关闭同一通道中除 keep_id 外的所有其他活跃 session
+    /// 依赖关系：同一个 channel 的 session 共享一个活跃位
+    pub fn close_in_channel_except(&mut self, keep_id: &str, channel: &str) -> Vec<String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut closed = Vec::new();
+        for (id, state) in self.sessions.iter_mut() {
+            if id != keep_id && !state.closed && state.channel == channel {
+                state.closed = true;
+                state.closed_at = Some(now);
+                closed.push(id.clone());
+            }
+        }
+        closed
     }
 
     /// 关闭所有 session（引擎 shutdown 时用）
@@ -208,24 +246,24 @@ mod tests {
     #[test]
     fn test_create_session() {
         let mut mgr = SessionManager::new();
-        let s = mgr.get_or_create("test-session");
+        let s = mgr.get_or_create("test-session", "test");
         assert_eq!(s.id, "test-session");
     }
 
     #[test]
     fn test_touch_updates_time() {
         let mut mgr = SessionManager::new();
-        let s1 = mgr.get_or_create("s1");
+        let s1 = mgr.get_or_create("s1", "test");
         let t1 = s1.last_active;
         std::thread::sleep(Duration::from_millis(10));
-        let s2 = mgr.get_or_create("s1");
+        let s2 = mgr.get_or_create("s1", "test");
         assert!(s2.last_active >= t1);
     }
 
     #[test]
     fn test_close_and_touch_reactivates() {
         let mut mgr = SessionManager::new();
-        let s = mgr.get_or_create("s1");
+        let s = mgr.get_or_create("s1", "test");
         assert!(!s.closed);
 
         // 手动 close 后检查状态
@@ -244,9 +282,9 @@ mod tests {
         // 通过 close_all + reap_idle 验证 close 后的 inactive 逻辑
         let mut mgr = SessionManager::new();
         mgr.set_idle_timeout(86400); // 一天后才冷却, 确保不会被时间问题影响
-        mgr.get_or_create("active");
+        mgr.get_or_create("active", "test");
         // 手动 close 另一个
-        let s = mgr.get_or_create("closed_manual");
+        let s = mgr.get_or_create("closed_manual", "test");
         s.close();
 
         // reap_idle 只关闭未closed的, 所以不会影响 closed_manual
@@ -259,7 +297,7 @@ mod tests {
     fn test_stale_removal() {
         let mut mgr = SessionManager::new();
         mgr.set_cleanup_timeout(0); // 0秒后清除, 立刻清理
-        let s = mgr.get_or_create("test");
+        let s = mgr.get_or_create("test", "test");
         s.close();
 
         let purged = mgr.reap_stale_closed();
@@ -273,8 +311,8 @@ mod tests {
     #[test]
     fn test_close_all() {
         let mut mgr = SessionManager::new();
-        mgr.get_or_create("a");
-        mgr.get_or_create("b");
+        mgr.get_or_create("a", "test");
+        mgr.get_or_create("b", "test");
         let ids = mgr.close_all();
         assert_eq!(ids.len(), 2);
         assert!(mgr.sessions().values().all(|s| s.closed));

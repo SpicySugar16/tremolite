@@ -233,7 +233,21 @@ fn main() {
     let _ = engine.register_module(Box::new(
         MemoryModule::new(memory_data_base).with_names(&ai_name, &username)
     ));
-    let _ = engine.register_module(Box::new(SessionModule::new(1800).with_session_path(profile_dir.clone())));
+    // 从 session.toml 读取会话配置
+    let mut session_idle_timeout: u64 = 1800;
+    let mut session_cleanup_timeout: u64 = 2592000;
+    let session_cfg_path = profile_dir.join("modules").join("session.toml");
+    if let Ok(content) = std::fs::read_to_string(&session_cfg_path) {
+        if let Ok(toml_val) = content.parse::<toml::Value>() {
+            if let Some(cfg) = toml_val.get("session") {
+                session_idle_timeout = cfg.get("idle_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(1800);
+                session_cleanup_timeout = cfg.get("cleanup_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(2592000);
+            }
+        }
+    }
+    let mut session_module = SessionModule::new(session_idle_timeout).with_session_path(profile_dir.clone());
+    session_module.manager.set_cleanup_timeout(session_cleanup_timeout);
+    let _ = engine.register_module(Box::new(session_module));
     let mut attn = AttentionModule::new();
     if let Some(ref cfg) = config {
         if let Some(ref emb_cfg) = cfg.embedding {
@@ -486,7 +500,7 @@ fn main() {
 
             // 启动 HTTP 服务
             println!("  Starting HTTP daemon on http://{addr}");
-            if let Err(e) = rt.block_on(run_server(chat_tx, pending_results, &addr, &parsed.profile_name, channel_registry)) {
+            if let Err(e) = rt.block_on(run_server(chat_tx, pending_results, &addr, &parsed.profile_name, channel_registry, Some(engine.modules.clone()))) {
                 eprintln!("  Server error: {e}");
             }
         }

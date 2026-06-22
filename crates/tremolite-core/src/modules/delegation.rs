@@ -244,7 +244,7 @@ impl Module for DelegationModule {
                 // 在 SessionModule 中注册子会话
                 handle.with_module("session", |m| {
                     if let Some(sm) = m.as_any_mut().and_then(|a| a.downcast_mut::<SessionModule>()) {
-                        sm.manager.get_or_create(&sub_sid);
+                        sm.manager.get_or_create(&sub_sid, "delegation");
                         // 自动共享，让父 session 能 peek
                         if let Some(state) = sm.manager.sessions_mut().get_mut(&sub_sid) {
                             state.share();

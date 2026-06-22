@@ -477,33 +477,76 @@ function renderChannelsTable(el){
     '<input id="channelsEditId" type="hidden" value="">'+
 
     '<div style="margin-bottom:10px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">名称</label>'+
-    '<input id="chName" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：QQ 主群">'+
+    '<input id="chName" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：QQ 主群"></div>'+
 
     '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">类型</label>'+
     '<select id="chType" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" onchange="switchChType()">'+
     '<option value="QqBot">QqBot</option>'+
-    '<option value="NapCat">NapCat</option>'+
-    '<option value="Http">Http</option></select></div>'+
+    '<option value="Telegram">Telegram</option>'+
+    '<option value="Discord">Discord</option>'+
+    '<option value="Signal">Signal</option>'+
+    '<option value="Slack">Slack</option>'+
+    '<option value="Matrix">Matrix</option>'+
+    '<option value="Feishu">飞书</option>'+
+    '<option value="Webhook">Webhook</option>'+
+    '<option value="Dashboard">Dashboard</option></select></div>'+
 
     '<div id="chFieldsQqBot" style="margin-top:8px">'+
     '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">App ID</label>'+
-    '<input id="chQqAppId" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="机器人 AppID">'+
+    '<input id="chQqAppId" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="机器人 AppID"></div>'+
     '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Client Secret</label>'+
     '<input id="chQqSecret" type="password" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="机器人 Client Secret">'+
     '<div style="margin-top:8px;display:flex;align-items:center;gap:6px">'+
     '<label class="toggle"><input id="chQqProduction" type="checkbox"><span class="sl"></span></label>'+
-    '<span style="color:var(--fg2);font-size:0.78rem">生产环境</span></div></div>'+
+    '<span style="color:var(--fg2);font-size:0.78rem">生产环境</span></div></div></div>'+
 
-    '<div id="chFieldsNapCat" style="display:none;margin-top:8px">'+
-    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">WebSocket URL</label>'+
-    '<input id="chNapCatWs" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="ws://127.0.0.1:8080">'+
+    '<div id="chFieldsTelegram" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Bot Token</label>'+
+    '<input id="chTelegramToken" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="123456:ABC-def_ghi"></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Chat ID（可选）</label>'+
+    '<input id="chTelegramChatId" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="-1001234567890"></div></div>'+
 
-    '<div id="chFieldsHttp" style="display:none;margin-top:8px">'+
+    '<div id="chFieldsDiscord" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Bot Token</label>'+
+    '<input id="chDiscordToken" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="MTE..."></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Channel ID（可选）</label>'+
+    '<input id="chDiscordChannelId" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="123456789012345678"></div></div>'+
+
+    '<div id="chFieldsSignal" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Signal Number</label>'+
+    '<input id="chSignalNumber" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="+15551234567"></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Server（可选）</label>'+
+    '<input id="chSignalServer" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="https://signal.example.com"></div></div>'+
+
+    '<div id="chFieldsSlack" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Bot Token</label>'+
+    '<input id="chSlackToken" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="xoxb-..."></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Channel（可选）</label>'+
+    '<input id="chSlackChannel" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="#general"></div></div>'+
+
+    '<div id="chFieldsMatrix" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Homeserver</label>'+
+    '<input id="chMatrixServer" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="https://matrix.example.com"></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">User ID</label>'+
+    '<input id="chMatrixUser" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="@bot:example.com"></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">Access Token</label>'+
+    '<input id="chMatrixToken" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="syt_..."></div></div>'+
+
+    '<div id="chFieldsFeishu" style="display:none;margin-top:8px">'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">App ID</label>'+
+    '<input id="chFeishuAppId" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="cli_..."></div>'+
+    '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">App Secret</label>'+
+    '<input id="chFeishuSecret" type="password" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="应用密钥"></div></div>'+
+
+    '<div id="chFieldsWebhook" style="display:none;margin-top:8px">'+
     '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">监听地址</label>'+
-    '<input id="chHttpListen" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="0.0.0.0:5836">'+
+    '<input id="chHttpListen" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="0.0.0.0:5836"></div></div>'+
+
+    '<div id="chFieldsDashboard" style="display:none;margin-top:8px">'+
+    '<div style="padding:10px;background:var(--bg3);border-radius:var(--radius-sm);text-align:center;color:var(--fg2);font-size:0.78rem">内部仪表盘通道，无需配置</div></div>'+
 
     '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">广播目标（可选）</label>'+
-    '<input id="chBroadcast" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：group_12345">'+
+    '<input id="chBroadcast" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：group_12345"></div>'+
 
     '<div style="margin-top:10px;display:flex;align-items:center;gap:6px">'+
     '<label class="toggle"><input id="chShareSession" type="checkbox" checked><span class="sl"></span></label>'+
@@ -513,7 +556,8 @@ function renderChannelsTable(el){
     '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">'+
     '<button class="btn" onclick="closeChannelsDlg()">取消</button>'+
     '<button class="btn accent" onclick="doSaveChannel()">确认</button>'+
-    '<span id="chSaveFeedback" style="font-size:0.72rem;color:var(--green);line-height:28px"></span></div></div>';
+    '<span id="chSaveFeedback" style="font-size:0.72rem;color:var(--green);line-height:28px"></span></div></div></div>'+
+    '<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">消息通道 v0.3.0</span></div>';
 
   el.innerHTML=html;
 }
@@ -521,8 +565,14 @@ function renderChannelsTable(el){
 window.switchChType=function(){
   const t=document.getElementById('chType').value;
   document.getElementById('chFieldsQqBot').style.display=t==='QqBot'?'':'none';
-  document.getElementById('chFieldsNapCat').style.display=t==='NapCat'?'':'none';
-  document.getElementById('chFieldsHttp').style.display=t==='Http'?'':'none';
+  document.getElementById('chFieldsTelegram').style.display=t==='Telegram'?'':'none';
+  document.getElementById('chFieldsDiscord').style.display=t==='Discord'?'':'none';
+  document.getElementById('chFieldsSignal').style.display=t==='Signal'?'':'none';
+  document.getElementById('chFieldsSlack').style.display=t==='Slack'?'':'none';
+  document.getElementById('chFieldsMatrix').style.display=t==='Matrix'?'':'none';
+  document.getElementById('chFieldsFeishu').style.display=t==='Feishu'?'':'none';
+  document.getElementById('chFieldsWebhook').style.display=t==='Webhook'?'':'none';
+  document.getElementById('chFieldsDashboard').style.display='none';
 };
 
 window.showChannelsAdd=function(){
@@ -534,7 +584,19 @@ window.showChannelsAdd=function(){
   document.getElementById('chQqAppId').value='';
   document.getElementById('chQqSecret').value='';
   document.getElementById('chQqProduction').checked=false;
-  document.getElementById('chNapCatWs').value='';
+  document.getElementById('chTelegramToken').value='';
+  document.getElementById('chTelegramChatId').value='';
+  document.getElementById('chDiscordToken').value='';
+  document.getElementById('chDiscordChannelId').value='';
+  document.getElementById('chSignalNumber').value='';
+  document.getElementById('chSignalServer').value='';
+  document.getElementById('chSlackToken').value='';
+  document.getElementById('chSlackChannel').value='';
+  document.getElementById('chMatrixServer').value='';
+  document.getElementById('chMatrixUser').value='';
+  document.getElementById('chMatrixToken').value='';
+  document.getElementById('chFeishuAppId').value='';
+  document.getElementById('chFeishuSecret').value='';
   document.getElementById('chHttpListen').value='';
   document.getElementById('chBroadcast').value='';
   document.getElementById('chShareSession').checked=true;
@@ -553,7 +615,19 @@ window.showChannelsEdit=function(idx){
   document.getElementById('chQqAppId').value=(c.config&&c.config.app_id)||'';
   document.getElementById('chQqSecret').value=(c.config&&c.config.client_secret)||'';
   document.getElementById('chQqProduction').checked=!!(c.config&&c.config.production);
-  document.getElementById('chNapCatWs').value=(c.config&&c.config.ws_url)||'';
+  document.getElementById('chTelegramToken').value=(c.config&&c.config.bot_token)||'';
+  document.getElementById('chTelegramChatId').value=(c.config&&c.config.chat_id)||'';
+  document.getElementById('chDiscordToken').value=(c.config&&c.config.bot_token)||'';
+  document.getElementById('chDiscordChannelId').value=(c.config&&c.config.channel_id)||'';
+  document.getElementById('chSignalNumber').value=(c.config&&c.config.phone)||'';
+  document.getElementById('chSignalServer').value=(c.config&&c.config.server)||'';
+  document.getElementById('chSlackToken').value=(c.config&&c.config.bot_token)||'';
+  document.getElementById('chSlackChannel').value=(c.config&&c.config.channel)||'';
+  document.getElementById('chMatrixServer').value=(c.config&&c.config.homeserver)||'';
+  document.getElementById('chMatrixUser').value=(c.config&&c.config.user_id)||'';
+  document.getElementById('chMatrixToken').value=(c.config&&c.config.access_token)||'';
+  document.getElementById('chFeishuAppId').value=(c.config&&c.config.app_id)||'';
+  document.getElementById('chFeishuSecret').value=(c.config&&c.config.app_secret)||'';
   document.getElementById('chHttpListen').value=(c.config&&c.config.listen)||'';
   document.getElementById('chBroadcast').value=c.broadcast_target||'';
   document.getElementById('chShareSession').checked=c.share_session!==false;
@@ -575,10 +649,22 @@ window.doSaveChannel=async function(){
   let config={};
   if(type==='QqBot'){
     config={app_id:document.getElementById('chQqAppId').value.trim(),client_secret:document.getElementById('chQqSecret').value.trim(),production:document.getElementById('chQqProduction').checked};
-  }else if(type==='NapCat'){
-    config={ws_url:document.getElementById('chNapCatWs').value.trim()};
-  }else if(type==='Http'){
+  }else if(type==='Telegram'){
+    config={bot_token:document.getElementById('chTelegramToken').value.trim(),chat_id:document.getElementById('chTelegramChatId').value.trim()};
+  }else if(type==='Discord'){
+    config={bot_token:document.getElementById('chDiscordToken').value.trim(),channel_id:document.getElementById('chDiscordChannelId').value.trim()};
+  }else if(type==='Signal'){
+    config={phone:document.getElementById('chSignalNumber').value.trim(),server:document.getElementById('chSignalServer').value.trim()};
+  }else if(type==='Slack'){
+    config={bot_token:document.getElementById('chSlackToken').value.trim(),channel:document.getElementById('chSlackChannel').value.trim()};
+  }else if(type==='Matrix'){
+    config={homeserver:document.getElementById('chMatrixServer').value.trim(),user_id:document.getElementById('chMatrixUser').value.trim(),access_token:document.getElementById('chMatrixToken').value.trim()};
+  }else if(type==='Feishu'){
+    config={app_id:document.getElementById('chFeishuAppId').value.trim(),app_secret:document.getElementById('chFeishuSecret').value.trim()};
+  }else if(type==='Webhook'){
     config={listen:document.getElementById('chHttpListen').value.trim()};
+  }else if(type==='Dashboard'){
+    config={internal:true};
   }
   const share_session=document.getElementById('chShareSession').checked;
 
@@ -960,8 +1046,6 @@ window.stopCronAutoRefresh=function(){
 
 // ─── Sessions Page ────
 async function renderSessions(el,d){
-  let html='<div class="card"><div class="card-hd"><h3>\u2630 会话</h3></div><div class="loading">加载中...</div></div>';
-  el.innerHTML=html;
   try{
     const r=await api('/dashboard/sessions');
     if(r.status==='ok'){
@@ -1005,23 +1089,30 @@ async function renderSessions(el,d){
           '<div style="font-size:0.72rem;margin-bottom:6px;color:var(--fg2)">共 '+sessions.length+' 个会话</div>'+
           '<table style="width:100%;border-collapse:collapse">'+
           '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg3);font-size:0.7rem">'+
-          '<th style="padding:4px 8px;text-align:left">会话ID</th>'+
-          '<th style="padding:4px 8px;text-align:center">状态</th>'+
-          '<th style="padding:4px 8px;text-align:center">共享</th>'+
-          '<th style="padding:4px 8px;text-align:right">最后活跃</th></tr></thead><tbody>';
+           '<th style="padding:4px 8px;text-align:left">会话ID</th>'+
+           '<th style="padding:4px 8px;text-align:center">状态</th>'+
+           '<th style="padding:4px 8px;text-align:center">共享</th>'+
+           '<th style="padding:4px 8px;text-align:right">最后活跃</th>'+
+           '<th style="padding:4px 8px;text-align:center">操作</th></tr></thead><tbody>';
         for(var si=0; si<sessions.length; si++){
           var s=sessions[si];
           html+='<tr style="border-bottom:1px solid var(--bg3)">'+
             '<td style="padding:4px 8px;font-family:var(--mono);font-size:0.75rem;color:var(--fg)">'+esc(s.id)+'</td>'+
             '<td style="padding:4px 8px;text-align:center"><span style="color:'+(s.status==='活跃'?'var(--green)':'var(--fg3)')+'">'+(s.status||'?')+'</span></td>'+
             '<td style="padding:4px 8px;text-align:center"><span style="cursor:pointer;color:'+(s.shared?'var(--accent)':'var(--fg3)')+'" onclick="toggleSessionShare(\''+esc(s.id)+'\')">'+(s.shared?'✓':'✕')+'</span></td>'+
-            '<td style="padding:4px 8px;text-align:right;font-size:0.7rem;color:var(--fg3)">'+(s.last_active_human||'-')+'</td></tr>';
+            '<td style="padding:4px 8px;text-align:right;font-size:0.7rem;color:var(--fg3)">'+(s.last_active_human||'-')+'</td>'+
+            '<td style="padding:4px 8px;text-align:center">'+
+              (s.status==='冷却'
+                ? '<button class="btn sm" style="font-size:0.7rem;padding:2px 8px" onclick="activateSession(\''+esc(s.id)+'\')">激活</button>'
+                : '<span style="font-size:0.7rem;color:var(--fg3)">—</span>')+
+            '</td></tr>';
         }
         html+='</tbody></table></div>';
       }else{
         html+='<div class="card"><div style="color:var(--fg3);font-size:0.78rem;padding:16px 0;text-align:center">暂无会话记录。</div></div>';
       }
       
+      html+='<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">会话管理器 v0.3.0</span></div>';
       el.innerHTML=html;
     }
   }catch(e){}
@@ -1030,6 +1121,21 @@ async function renderSessions(el,d){
 // 引擎模块页包装——无参版，供 renderModule({modId:'session'}) 调用
 window.renderSessionsPage = async function(el){
   return renderSessions(el, {});
+};
+
+// ─── 会话激活 ────
+window.activateSession = async function(sessionId){
+  if(!confirm('确定要激活会话「'+sessionId+'」吗？')) return;
+  try{
+    var r=await apiPost('/dashboard/session/activate',{session_id:sessionId});
+    if(r.status==='ok'){
+      renderSessionsPage(document.getElementById('pageContent'));
+    }else{
+      alert('激活失败: '+(r.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
 };
 
 // ─── 会话配置自动保存 ────
@@ -1463,6 +1569,7 @@ function renderMemoryPage(el, data){
   const meta=data.metabolism||{};
   
   window._memoryData=data;
+  window._memPages={l1:0,l2:0,l3:0,ram:0,disk:0};
   
   let html='';
   
@@ -1806,6 +1913,7 @@ function switchMemTab(tab){
   var btn=document.getElementById('memTabBtn_'+tab);
   if(btn) btn.style.background='var(--accent-dim)';
   
+  if(window._memPages) window._memPages[tab]=0;
   renderMemTabContent(tab);
 }
 
@@ -1816,18 +1924,27 @@ function renderMemTabContent(tab){
   var entries=layers[tab]||[];
   var container=document.getElementById('memTabContent');
   if(!container) return;
-  
+
+  var pageSize=20;
+  var totalPages=Math.ceil(entries.length/pageSize)||1;
+  if(!window._memPages) window._memPages={};
+  var page=window._memPages[tab]||0;
+  if(page>=totalPages) page=0;
+
+  var start=page*pageSize;
+  var end=Math.min(start+pageSize, entries.length);
+
   var html='';
   if(entries.length===0){
     html='<div class="card"><div class="card-hd"><h3>'+esc(tabLabel(tab))+'</h3></div><div style="padding:16px;text-align:center;color:var(--fg3);font-size:0.8rem">暂无数据</div></div>';
     container.innerHTML=html;
     return;
   }
-  
-  html='<div class="card"><div class="card-hd"><h3>'+esc(tabLabel(tab))+'</h3><span style="font-size:0.72rem;color:var(--fg3)">共 '+entries.length+' 条</span></div>';
-  
+
+  html='<div class="card"><div class="card-hd"><h3>'+esc(tabLabel(tab))+'</h3><span style="font-size:0.72rem;color:var(--fg3)">共 '+entries.length+' 条 · 第'+(page+1)+'/'+totalPages+'页</span></div>';
+
   if(tab==='l1'){
-    for(var i=0;i<entries.length;i++){
+    for(var i=start;i<end;i++){
       var e=entries[i];
       html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
         '<div style="display:flex;justify-content:space-between;align-items:start">'+
@@ -1842,7 +1959,7 @@ function renderMemTabContent(tab){
         '</div></div>';
     }
   }else if(tab==='l2'){
-    for(var i=0;i<entries.length;i++){
+    for(var i=start;i<end;i++){
       var e=entries[i];
       html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
         '<div style="display:flex;justify-content:space-between;align-items:start">'+
@@ -1856,7 +1973,7 @@ function renderMemTabContent(tab){
         '</div></div>';
     }
   }else if(tab==='l3'){
-    for(var i=0;i<entries.length;i++){
+    for(var i=start;i<end;i++){
       var e=entries[i];
       html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
         '<div style="display:flex;justify-content:space-between;align-items:center">'+
@@ -1868,7 +1985,7 @@ function renderMemTabContent(tab){
         '</div>';
     }
   }else if(tab==='ram'){
-    for(var i=0;i<entries.length;i++){
+    for(var i=start;i<end;i++){
       var e=entries[i];
       html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
         '<div style="color:var(--fg2);word-break:break-all">'+esc((e.content_preview||'').substring(0,120))+'</div>'+
@@ -1876,7 +1993,7 @@ function renderMemTabContent(tab){
         '</div>';
     }
   }else if(tab==='disk'){
-    for(var i=0;i<entries.length;i++){
+    for(var i=start;i<end;i++){
       var e=entries[i];
       html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
         '<span style="color:var(--fg2)">'+esc((e.keyword||'').substring(0,100))+'</span>'+
@@ -1884,9 +2001,34 @@ function renderMemTabContent(tab){
         '</div>';
     }
   }
-  
+
+  if(totalPages>1){
+    html+='<div style="display:flex;align-items:center;justify-content:center;gap:4px;padding:8px 0;border-top:1px solid var(--bg3);margin-top:4px">';
+    html+='<button class="btn sm" style="font-size:0.7rem;padding:2px 8px" onclick="switchMemPage(\''+tab+'\',-1)"'+(page===0?' disabled':'')+'>‹ 上一页</button>';
+    var maxPageBtns=5;
+    var startPage=Math.max(0, page-Math.floor(maxPageBtns/2));
+    var endPage=Math.min(totalPages, startPage+maxPageBtns);
+    if(endPage-startPage<maxPageBtns) startPage=Math.max(0, endPage-maxPageBtns);
+    for(var pi=startPage;pi<endPage;pi++){
+      html+='<button class="btn sm" style="font-size:0.7rem;padding:2px 6px;min-width:28px;'+(pi===page?'background:var(--accent);color:#fff':'')+'" onclick="switchMemPage(\''+tab+'\','+(pi-page)+')">'+(pi+1)+'</button>';
+    }
+    html+='<button class="btn sm" style="font-size:0.7rem;padding:2px 8px" onclick="switchMemPage(\''+tab+'\',1)"'+(page>=totalPages-1?' disabled':'')+'>下一页 ›</button>';
+    html+='</div>';
+  }
+
   html+='</div>';
   container.innerHTML=html;
+}
+
+function switchMemPage(tab,delta){
+  if(!window._memPages) window._memPages={};
+  var entries=(window._memoryData.layers||{})[tab]||[];
+  var totalPages=Math.ceil(entries.length/20)||1;
+  var page=(window._memPages[tab]||0)+delta;
+  if(page<0) page=0;
+  if(page>=totalPages) page=totalPages-1;
+  window._memPages[tab]=page;
+  renderMemTabContent(tab);
 }
 
 function tabLabel(tab){

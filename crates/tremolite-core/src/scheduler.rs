@@ -41,6 +41,8 @@ pub struct SessionScheduler {
     shared: Arc<SchedulerShared>,
     /// worker 空闲超时——超过此时间无消息则自动退出（默认 300 秒）
     idle_timeout: Duration,
+    /// 定期维护间隔——消息循环按此间隔执行维护（默认 60 秒）
+    maintenance_interval: Duration,
     /// worker 死亡通知通道——panic 的 worker 往这里发 session_id
     death_tx: mpsc::Sender<String>,
     /// 死亡通知接收端——调度器主循环从中读取已死亡的 worker
@@ -73,6 +75,7 @@ struct SessionWorker {
     inbound_rx: mpsc::Receiver<SessionTask>,
     pending_results: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
     idle_timeout: Duration,
+    maintenance_interval: Duration,
     last_active: Instant,
     death_tx: mpsc::Sender<String>,
 }
@@ -88,6 +91,7 @@ impl SessionWorker {
         inbound_rx: mpsc::Receiver<SessionTask>,
         pending_results: Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>,
         idle_timeout: Duration,
+        maintenance_interval: Duration,
         death_tx: mpsc::Sender<String>,
     ) -> Self {
         Self {
@@ -101,6 +105,7 @@ impl SessionWorker {
             inbound_rx,
             pending_results,
             idle_timeout,
+            maintenance_interval,
             last_active: Instant::now(),
             death_tx,
         }
@@ -139,15 +144,26 @@ impl SessionWorker {
         let ctx = EventContext::with_session(self.modules.handle(), self.session_id.clone());
         let _ = self.modules.broadcast(&Event::Startup, &ctx);
 
-        // 消息循环——使用 recv_timeout 支持空闲退出
+        // 消息循环——使用 recv_timeout 支持定期维护 + 空闲退出
         loop {
-            let task = match self.inbound_rx.recv_timeout(self.idle_timeout) {
+            let task = match self.inbound_rx.recv_timeout(self.maintenance_interval) {
                 Ok(task) => {
                     self.last_active = Instant::now();
                     task
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // 空闲超时——检查是否真的空闲了 idle_timeout 这么久
+                    // 定期维护：冷却闲置session + 保存状态
+                    self.modules.with_module_mut("session", |m| {
+                        if let Some(sm) = m.as_any_mut()
+                            .and_then(|a| a.downcast_mut::<crate::modules::session::SessionModule>())
+                        {
+                            sm.reload_config();
+                            sm.manager.reap_idle();
+                            sm.save_state();
+                        }
+                    });
+
+                    // 检查是否真的空闲了 idle_timeout 这么久
                     if self.last_active.elapsed() >= self.idle_timeout {
                         tracing::info!("scheduler: worker idle timeout for session '{}'", self.session_id);
                         break;
@@ -551,6 +567,7 @@ impl SessionScheduler {
             Arc::new(Mutex::new(HashMap::new()));
 
         let idle_timeout = Duration::from_secs(300);
+        let maintenance_interval = Duration::from_secs(60);
         let (death_tx, worker_deaths) = mpsc::channel();
 
         (
@@ -568,6 +585,7 @@ impl SessionScheduler {
                     base_soul: base_soul.to_string(),
                 }),
                 idle_timeout,
+                maintenance_interval,
                 death_tx,
                 worker_deaths,
             },
@@ -578,6 +596,11 @@ impl SessionScheduler {
     /// 获取入站发送端——外部通过它投递消息
     pub fn inbound(&self) -> mpsc::Sender<SessionTask> {
         self.inbound_tx.clone()
+    }
+
+    /// 设置定期维护间隔
+    pub fn set_maintenance_interval(&mut self, interval: Duration) {
+        self.maintenance_interval = interval;
     }
 
     /// 注册一个待返回结果——外部等待子 session 完成时使用
@@ -632,6 +655,7 @@ impl SessionScheduler {
             worker_rx,
             self.pending_results.clone(),
             self.idle_timeout,
+            self.maintenance_interval,
             self.death_tx.clone(),
         );
 

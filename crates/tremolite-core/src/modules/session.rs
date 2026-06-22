@@ -107,6 +107,8 @@ pub struct SessionModule {
     _cleanup_counter: AtomicU64,
     /// 持久化文件路径（配置包目录下的 sessions/session_state.json）
     session_path: Option<std::path::PathBuf>,
+    /// session_state.json 的上次修改时间——用于检测外部修改
+    last_state_mtime: Option<std::time::SystemTime>,
 }
 
 impl SessionModule {
@@ -118,6 +120,7 @@ impl SessionModule {
             _message_count: AtomicU64::new(0),
             _cleanup_counter: AtomicU64::new(0),
             session_path: None,
+            last_state_mtime: None,
         }
     }
 
@@ -131,11 +134,34 @@ impl SessionModule {
         self.manager.count()
     }
 
-    fn on_message(&mut self, session_id: &str, content: &str) {
-        self.manager.get_or_create(session_id);
+    /// 生成短 hex 后缀的 session id
+    fn generate_session_id(&self, base: &str) -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let suffix = (nanos & 0xFFFFFFFF) as u32;
+        format!("{}_{:08x}", base, suffix)
+    }
+
+    /// 如果请求的 session 已冷却，返回一个新 session id；否则返回原 id
+    fn resolve_session_id(&self, requested: &str) -> String {
+        if let Some(state) = self.manager.sessions().get(requested) {
+            if state.closed {
+                return self.generate_session_id(requested);
+            }
+        }
+        requested.to_string()
+    }
+
+    fn on_message(&mut self, session_id: &str, channel: &str, content: &str) {
+        // 每次收到消息时尝试重新加载配置——dashboard改的值立刻生效
+        self.reload_config();
+        let actual_id = self.resolve_session_id(session_id);
+        self.manager.get_or_create(&actual_id, channel);
         self._message_count.fetch_add(1, Ordering::Relaxed);
         let (summary, mood) = NoteDistiller::distill(content);
-        self.ring.push(session_id.to_string(), summary, mood);
+        self.ring.push(actual_id, summary, mood);
 
         // 每次收到消息时顺便冷却闲置 session
         let idle = self.manager.reap_idle();
@@ -192,7 +218,7 @@ impl SessionModule {
         self.session_path.as_ref().map(|p| p.join("sessions").join("session_state.json"))
     }
 
-    fn save_state(&self) {
+    pub(crate) fn save_state(&self) {
         if let Some(ref path) = self.session_state_path() {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -209,9 +235,85 @@ impl SessionModule {
                 if let Ok(content) = std::fs::read_to_string(path) {
                     if let Ok(mgr) = serde_json::from_str::<SessionManager>(&content) {
                         self.manager = mgr;
+                        let mut migrated = 0;
+                        for (id, state) in self.manager.sessions_mut().iter_mut() {
+                            if state.channel.is_empty() {
+                                state.channel = if id.starts_with("http") || *id == "default" {
+                                    "http".to_string()
+                                } else if id.starts_with("ws") {
+                                    "websocket".to_string()
+                                } else if id.starts_with("cron") {
+                                    "cron".to_string()
+                                } else if id.contains(':') {
+                                    id.clone()
+                                } else {
+                                    "unknown".to_string()
+                                };
+                                migrated += 1;
+                            }
+                        }
+                        if migrated > 0 {
+                            tracing::info!("session: migrated {} old sessions with inferred channels", migrated);
+                            self.save_state();
+                        }
                         tracing::info!("session: loaded state from {:?}", path);
                     }
                 }
+            }
+        }
+    }
+
+    /// 手动触发闲置检查 + 保存状态
+    /// dashboard 查看 session 列表时调用，确保冷却不被消息驱动唯一依赖
+    pub fn reap_and_save(&mut self) {
+        let cooled = self.manager.reap_idle();
+        if !cooled.is_empty() {
+            tracing::debug!("session: reap_and_save cooled {} sessions", cooled.len());
+        }
+        self.save_state();
+    }
+
+    /// 从 session.toml 重新加载 timeout 配置——让 dashboard 改的配置立即生效
+    pub fn activate_session(&mut self, session_id: &str) -> Result<String, String> {
+        let channel = self.manager.sessions()
+            .get(session_id)
+            .map(|s| s.channel.clone())
+            .unwrap_or_default();
+        self.manager.close_in_channel_except(session_id, &channel);
+        if let Some(state) = self.manager.sessions_mut().get_mut(session_id) {
+            state.closed = false;
+            state.closed_at = None;
+            state.last_active = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            self.save_state();
+            Ok(format!("会话「{}」已激活", session_id))
+        } else {
+            Err(format!("未找到会话「{}」", session_id))
+        }
+    }
+
+    pub(crate) fn reload_config(&mut self) {
+        let cfg_path = match self.session_path {
+            Some(ref p) => p.join("modules").join("session.toml"),
+            None => return,
+        };
+        if !cfg_path.exists() { return; }
+        let content = match std::fs::read_to_string(&cfg_path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let toml_val = match content.parse::<toml::Value>() {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        if let Some(cfg) = toml_val.get("session") {
+            if let Some(val) = cfg.get("idle_timeout").and_then(|v| v.as_integer()) {
+                self.manager.set_idle_timeout(val as u64);
+            }
+            if let Some(val) = cfg.get("cleanup_timeout").and_then(|v| v.as_integer()) {
+                self.manager.set_cleanup_timeout(val as u64);
             }
         }
     }
@@ -227,7 +329,7 @@ impl Module for SessionModule {
     }
 
     fn version(&self) -> &str {
-        "0.2.0"
+        "0.3.0"
     }
 
     fn provides(&self) -> Vec<Capability> {
@@ -337,6 +439,7 @@ impl Module for SessionModule {
     fn execute_tool(&mut self, name: &str, args: &str) -> Result<String, ModuleError> {
         match name {
             "list_active_sessions" => {
+                self.manager.reap_idle();
                 let lines = self.list_active_summaries();
                 if lines.is_empty() {
                     return Ok("当前没有活跃会话。".into());
@@ -467,7 +570,19 @@ impl Module for SessionModule {
         match event {
             Event::Startup => {
                 self.handle = Some(ctx.engine.clone());
+                // 保存构造时设置的timeout值——load_state会覆盖整个manager
+                let saved_idle = self.manager.idle_timeout_secs();
+                let saved_cleanup = self.manager.cleanup_timeout_secs();
                 self.load_state();
+                // 恢复构造时的timeout值（不从旧文件恢复）
+                self.manager.set_idle_timeout(saved_idle);
+                self.manager.set_cleanup_timeout(saved_cleanup);
+                // 冷却引擎关闭期间过期的session
+                let cooled = self.manager.reap_idle();
+                if !cooled.is_empty() {
+                    self.save_state();
+                    tracing::info!("session: cooled {} expired sessions on startup", cooled.len());
+                }
                 tracing::info!("session: engine started, {} sessions restored", self.manager.count());
                 Ok(EventResponse::Pass)
             }
@@ -477,13 +592,13 @@ impl Module for SessionModule {
                 tracing::info!("session: shutdown, closed and saved {} sessions", self.manager.count());
                 Ok(EventResponse::Pass)
             }
-            Event::OnMessage { ref input, .. } => {
+            Event::OnMessage { ref input, ref channel } => {
                 let sid = if ctx.session_id.is_empty() {
                     "default"
                 } else {
                     &ctx.session_id
                 };
-                self.on_message(sid, input);
+                self.on_message(sid, channel, input);
                 self.save_state();
                 Ok(EventResponse::Pass)
             }
@@ -542,7 +657,7 @@ mod tests {
     #[test]
     fn test_share_unshare_cycle() {
         let mut mgr = SessionManager::new();
-        let s = mgr.get_or_create("test");
+        let s = mgr.get_or_create("test", "test");
         assert_eq!(s.shared, false);
         s.share();
         assert_eq!(s.shared, true);
@@ -553,8 +668,8 @@ mod tests {
     #[test]
     fn test_tool_execution_list() {
         let mut sm = SessionModule::new(3600);
-        sm.on_message("alpha", "在吗？");
-        sm.on_message("beta", "帮忙看看这段代码");
+        sm.on_message("alpha", "test", "在吗？");
+        sm.on_message("beta", "test", "帮忙看看这段代码");
 
         let result = sm.execute_tool("list_active_sessions", "{}").unwrap();
         assert!(result.contains("alpha"), "应该列出 alpha session");
@@ -564,7 +679,7 @@ mod tests {
     #[test]
     fn test_tool_share_toggle() {
         let mut sm = SessionModule::new(3600);
-        sm.on_message("test", "你好");
+        sm.on_message("test", "test", "你好");
 
         // 默认不共享
         assert!(!sm.manager.sessions().get("test").unwrap().shared);
