@@ -105,6 +105,8 @@ pub struct SessionModule {
     pub handle: Option<EngineHandle>,
     _message_count: AtomicU64,
     _cleanup_counter: AtomicU64,
+    /// 持久化文件路径（配置包目录下的 sessions/session_state.json）
+    session_path: Option<std::path::PathBuf>,
 }
 
 impl SessionModule {
@@ -115,7 +117,14 @@ impl SessionModule {
             handle: None,
             _message_count: AtomicU64::new(0),
             _cleanup_counter: AtomicU64::new(0),
+            session_path: None,
         }
+    }
+
+    /// 设置持久化路径（配置包目录）
+    pub fn with_session_path(mut self, path: std::path::PathBuf) -> Self {
+        self.session_path = Some(path);
+        self
     }
 
     pub fn active_sessions(&self) -> usize {
@@ -177,6 +186,34 @@ impl SessionModule {
             let flag = if *shared { "共享" } else { "私密" };
             format!("session:{} [{}] 活跃于{}", id, flag, ago)
         }).collect()
+    }
+
+    fn session_state_path(&self) -> Option<std::path::PathBuf> {
+        self.session_path.as_ref().map(|p| p.join("sessions").join("session_state.json"))
+    }
+
+    fn save_state(&self) {
+        if let Some(ref path) = self.session_state_path() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(json) = serde_json::to_string_pretty(&self.manager) {
+                let _ = std::fs::write(path, json);
+            }
+        }
+    }
+
+    fn load_state(&mut self) {
+        if let Some(ref path) = self.session_state_path() {
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    if let Ok(mgr) = serde_json::from_str::<SessionManager>(&content) {
+                        self.manager = mgr;
+                        tracing::info!("session: loaded state from {:?}", path);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -374,22 +411,18 @@ impl Module for SessionModule {
             }
 
             "share_session" => {
-                // 这里不拿 session_id 参数——默认共享当前引擎 session
-                // 实际使用时 engine 会通过 ctx 传入 session_id
-                // 我们遍历所有 session 让所有不私密的都共享
-                // 更准确的实现需要在 execute_tool 中接收 ctx
-                let mutable_self = self;
-                for (_id, state) in mutable_self.manager.sessions_mut() {
+                for (_id, state) in self.manager.sessions_mut() {
                     state.share();
                 }
+                self.save_state();
                 Ok("当前会话已标记为共享。其他会话现在可以通过 peek_session 查看本会话的近期对话了。".into())
             }
 
             "unshare_session" => {
-                let mutable_self = self;
-                for (_id, state) in mutable_self.manager.sessions_mut() {
+                for (_id, state) in self.manager.sessions_mut() {
                     state.unshare();
                 }
+                self.save_state();
                 Ok("当前会话已标记为私密。其他会话将无法查看本会话的近期对话。".into())
             }
 
@@ -408,11 +441,13 @@ impl Module for SessionModule {
                 match timeout_type {
                     "cooling" => {
                         self.manager.set_idle_timeout(seconds);
+                        self.save_state();
                         let mins = seconds / 60;
                         Ok(format!("闲置冷却时间已设为 {} 秒（约 {} 分钟）喔。", seconds, mins))
                     }
                     "cleanup" => {
                         self.manager.set_cleanup_timeout(seconds);
+                        self.save_state();
                         let days = seconds / 86400;
                         Ok(format!("清理超时已设为 {} 秒（约 {} 天）呢。", seconds, days))
                     }
@@ -432,12 +467,14 @@ impl Module for SessionModule {
         match event {
             Event::Startup => {
                 self.handle = Some(ctx.engine.clone());
-                tracing::info!("session: engine started");
+                self.load_state();
+                tracing::info!("session: engine started, {} sessions restored", self.manager.count());
                 Ok(EventResponse::Pass)
             }
             Event::Shutdown => {
-                let closed = self.manager.close_all();
-                tracing::info!("session: shutdown, closed {} active sessions", closed.len());
+                self.manager.close_all();
+                self.save_state();
+                tracing::info!("session: shutdown, closed and saved {} sessions", self.manager.count());
                 Ok(EventResponse::Pass)
             }
             Event::OnMessage { ref input, .. } => {
@@ -447,6 +484,7 @@ impl Module for SessionModule {
                     &ctx.session_id
                 };
                 self.on_message(sid, input);
+                self.save_state();
                 Ok(EventResponse::Pass)
             }
             _ => Ok(EventResponse::Pass),

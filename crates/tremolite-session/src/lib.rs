@@ -9,7 +9,10 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 /// 会话状态——引擎通过 session_id 查找
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionState {
     pub id: String,
     pub last_active: u64,
@@ -64,6 +67,7 @@ impl SessionState {
 }
 
 /// 会话管理器
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionManager {
     sessions: HashMap<String, SessionState>,
     /// 冷却超时（秒）——闲置超过此时间后自动 close
@@ -170,6 +174,23 @@ impl SessionManager {
     pub fn sessions_mut(&mut self) -> &mut HashMap<String, SessionState> {
         &mut self.sessions
     }
+
+    /// 保存会话状态到 JSON 文件
+    pub fn save(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// 从 JSON 文件加载会话状态
+    pub fn load(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        let mgr = serde_json::from_str(&content)?;
+        Ok(mgr)
+    }
 }
 
 fn now_secs() -> u64 {
@@ -182,6 +203,7 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_create_session() {

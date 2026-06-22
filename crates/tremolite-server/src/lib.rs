@@ -2418,47 +2418,45 @@ async fn handle_dashboard_sessions(
         }
     }
 
-    // 扫描 session 数据库文件
-    let sessions_dir = std::path::Path::new(&home).join(".hermes").join("sessions");
-    let mut session_files = Vec::new();
-    let mut total_size: u64 = 0;
-    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("db") {
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                total_size += size;
-                let modified = std::fs::metadata(&path).ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let ago = if modified == 0 { 0 } else { (uptime as u64).saturating_sub(modified) };
-                let last_active_human = if ago < 60 { format!("{}秒前", ago) }
-                    else if ago < 3600 { format!("{}分钟前", ago / 60) }
-                    else if ago < 86400 { format!("{}小时前", ago / 3600) }
-                    else { format!("{}天前", ago / 86400) };
-                let size_human = if size > 1048576 {
-                    format!("{:.1} MB", size as f64 / 1048576.0)
-                } else if size > 1024 {
-                    format!("{:.1} KB", size as f64 / 1024.0)
-                } else {
-                    format!("{} B", size)
-                };
-                session_files.push(serde_json::json!({
-                    "name": path.file_stem().and_then(|s| s.to_str()).unwrap_or("?"),
-                    "bytes": size,
-                    "size_human": size_human,
-                    "last_modified": modified,
-                    "last_active_human": last_active_human,
-                }));
+    // 从持久文件读取会话状态
+    let state_path = tremolite_dir.join("profiles").join(&state.profile_name).join("sessions").join("session_state.json");
+    let mut session_list: Vec<serde_json::Value> = Vec::new();
+    let mut active_count: usize = 0;
+    let mut shared_count: usize = 0;
+
+    if let Ok(content) = std::fs::read_to_string(&state_path) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(sessions) = json.get("sessions").and_then(|v| v.as_object()) {
+                for (sid, s) in sessions {
+                    let closed = s.get("closed").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let shared = s.get("shared").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let last_active = s.get("last_active").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if !closed { active_count += 1; }
+                    if shared { shared_count += 1; }
+
+                    let ago = if last_active == 0 { 0 } else { (uptime as u64).saturating_sub(last_active) };
+                    let last_active_human = if ago < 60 { format!("{}秒前", ago) }
+                        else if ago < 3600 { format!("{}分钟前", ago / 60) }
+                        else if ago < 86400 { format!("{}小时前", ago / 3600) }
+                        else { format!("{}天前", ago / 86400) };
+
+                    session_list.push(serde_json::json!({
+                        "id": sid,
+                        "shared": shared,
+                        "closed": closed,
+                        "last_active": last_active,
+                        "last_active_human": last_active_human,
+                        "status": if closed { "冷却" } else { "活跃" },
+                    }));
+                }
             }
         }
     }
-    // 按最后修改时间降序排列
-    session_files.sort_by(|a, b| {
-        let ta = a.get("last_modified").and_then(|v| v.as_u64()).unwrap_or(0);
-        let tb = b.get("last_modified").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // 按最后活跃时间降序排列
+    session_list.sort_by(|a, b| {
+        let ta = a.get("last_active").and_then(|v| v.as_u64()).unwrap_or(0);
+        let tb = b.get("last_active").and_then(|v| v.as_u64()).unwrap_or(0);
         tb.cmp(&ta)
     });
 
@@ -2467,16 +2465,6 @@ async fn handle_dashboard_sessions(
         else { format!("{}小时", idle_timeout / 3600) };
     let cleanup_human = if cleanup_timeout < 86400 { format!("{}小时", cleanup_timeout / 3600) }
         else { format!("{}天", cleanup_timeout / 86400) };
-
-    // 计算文件大小统计
-    let file_count = session_files.len();
-    let size_human = if total_size > 1048576 {
-        format!("{:.1} MB", total_size as f64 / 1048576.0)
-    } else if total_size > 1024 {
-        format!("{:.1} KB", total_size as f64 / 1024.0)
-    } else {
-        format!("{} B", total_size)
-    };
 
     Json(serde_json::json!({
         "status": "ok",
@@ -2489,24 +2477,21 @@ async fn handle_dashboard_sessions(
         "active_session": {
             "platform": "QQ Bot",
             "user": "琳玲",
-            "state": "在线",
+            "state": "活跃",
         },
-        "session_files": session_files,
+        "sessions": session_list,
+        "stats": {
+            "total": session_list.len(),
+            "active": active_count,
+            "shared": shared_count,
+            "config_source": config_path.to_string_lossy().to_string(),
+        },
         "config": {
             "idle_timeout": idle_timeout,
             "idle_timeout_human": idle_human,
             "cleanup_timeout": cleanup_timeout,
             "cleanup_timeout_human": cleanup_human,
             "max_rings": max_rings,
-            "config_path": config_path.to_string_lossy().to_string(),
-        },
-        "stats": {
-            "file_count": file_count,
-            "total_size": total_size,
-            "total_size_human": size_human,
-            "largest_file": session_files.first()
-                .and_then(|f| f.get("name").and_then(|n| n.as_str().map(|s| s.to_string())))
-                .unwrap_or_default(),
         },
     }))
 }

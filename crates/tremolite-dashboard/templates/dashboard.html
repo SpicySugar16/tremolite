@@ -948,7 +948,6 @@ async function renderSessions(el,d){
     const r=await api('/dashboard/sessions');
     if(r.status==='ok'){
       const act=r.active_session||{};
-      const files=r.session_files||[];
       const cfg=r.config||{};
       const stats=r.stats||{};
       
@@ -959,12 +958,13 @@ async function renderSessions(el,d){
         '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+(act.state||'-')+'</span></span></div>'+
         '<div class="row"><span class="l">运行</span><span class="v">'+(r.uptime_human?r.uptime_human.hours+'h '+r.uptime_human.minutes+'m':'?')+'</span></div></div>'+
         
-        '<div class="card"><div class="card-hd"><h3>存储概览</h3></div>'+
-        '<div class="row"><span class="l">会话文件</span><span class="v">'+files.length+' 个</span></div>'+
-        '<div class="row"><span class="l">占用空间</span><span class="v">'+(stats.total_size_human||'?')+'</span></div>'+
-        '<div class="row"><span class="l">最大文件</span><span class="v">'+(stats.largest_file||'-')+'</span></div>'+
+        // 会话统计卡片（替换原来的"存储概览"）
+        '<div class="card"><div class="card-hd"><h3>\u4F1A\u8BDD\u7EDF\u8BA1</h3></div>'+
+        '<div class="row"><span class="l">总会话</span><span class="v">'+(stats.total||0)+' 个</span></div>'+
+        '<div class="row"><span class="l">活跃</span><span class="v">'+(stats.active||0)+' 个</span></div>'+
+        '<div class="row"><span class="l">共享</span><span class="v">'+(stats.shared||0)+' 个</span></div>'+
         '<div class="row"><span class="l">配置来源</span><span class="v" style="font-size:0.65rem;font-family:var(--mono);color:var(--fg3)">'+
-        esc(cfg.config_path||'')+'</span></div></div></div>';
+        esc(stats.config_source||'')+'</span></div></div></div>';
       
       // 超时配置卡片
       html+='<div class="card"><div class="card-hd"><h3>⏱ 会话超时配置</h3></div>'+
@@ -972,31 +972,39 @@ async function renderSessions(el,d){
         '<div class="row"><span class="l">清理保留</span><span class="v">'+(cfg.cleanup_timeout_human||'30天')+'</span></div>'+
         '<div class="row"><span class="l">环容量</span><span class="v">'+(cfg.max_rings||20)+' 条</span></div></div>';
       
-      // 会话文件列表
-      if(files.length>0){
-        html+='<div class="card"><div class="card-hd"><h3>📁 会话文件</h3></div>'+
-          '<div style="font-size:0.72rem;margin-bottom:6px;color:var(--fg2)">共 '+files.length+' 个文件 · 点击行可查看详情</div>'+
+      // 会话列表表格
+      var sessions=r.sessions||[];
+      if(sessions.length>0){
+        html+='<div class="card"><div class="card-hd"><h3>📋 会话列表</h3></div>'+
+          '<div style="font-size:0.72rem;margin-bottom:6px;color:var(--fg2)">共 '+sessions.length+' 个会话</div>'+
           '<table style="width:100%;border-collapse:collapse">'+
           '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg3);font-size:0.7rem">'+
-          '<th style="padding:4px 8px;text-align:left">名称</th>'+
-          '<th style="padding:4px 8px;text-align:right">大小</th>'+
+          '<th style="padding:4px 8px;text-align:left">会话ID</th>'+
+          '<th style="padding:4px 8px;text-align:center">状态</th>'+
+          '<th style="padding:4px 8px;text-align:center">共享</th>'+
           '<th style="padding:4px 8px;text-align:right">最后活跃</th></tr></thead><tbody>';
-        for(var fi=0; fi<files.length; fi++){
-          var f=files[fi];
-          html+='<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="console.log(\''+esc(f.name)+'\')">'+
-            '<td style="padding:4px 8px;font-family:var(--mono);font-size:0.75rem;color:var(--fg)">'+esc(f.name)+'</td>'+
-            '<td style="padding:4px 8px;text-align:right;font-size:0.72rem;color:var(--fg2)">'+(f.size_human||f.bytes+'B')+'</td>'+
-            '<td style="padding:4px 8px;text-align:right;font-size:0.7rem;color:var(--fg3)">'+(f.last_active_human||'-')+'</td></tr>';
+        for(var si=0; si<sessions.length; si++){
+          var s=sessions[si];
+          html+='<tr style="border-bottom:1px solid var(--bg3)">'+
+            '<td style="padding:4px 8px;font-family:var(--mono);font-size:0.75rem;color:var(--fg)">'+esc(s.id)+'</td>'+
+            '<td style="padding:4px 8px;text-align:center"><span style="color:'+(s.status==='活跃'?'var(--green)':'var(--fg3)')+'">'+(s.status||'?')+'</span></td>'+
+            '<td style="padding:4px 8px;text-align:center">'+(s.shared?'<span style="color:var(--accent)">✓</span>':'✕')+'</td>'+
+            '<td style="padding:4px 8px;text-align:right;font-size:0.7rem;color:var(--fg3)">'+(s.last_active_human||'-')+'</td></tr>';
         }
         html+='</tbody></table></div>';
       }else{
-        html+='<div class="card"><div style="color:var(--fg3);font-size:0.78rem;padding:16px 0;text-align:center">暂无会话文件。</div></div>';
+        html+='<div class="card"><div style="color:var(--fg3);font-size:0.78rem;padding:16px 0;text-align:center">暂无会话记录。</div></div>';
       }
       
       el.innerHTML=html;
     }
   }catch(e){}
 }
+
+// 引擎模块页包装——无参版，供 renderModule({modId:'session'}) 调用
+window.renderSessionsPage = async function(el){
+  return renderSessions(el, {});
+};
 
 // ─── Logs Page ────
 async function renderLogs(el,d){
@@ -1220,6 +1228,10 @@ async function renderModule(el,modId,statusData){
         return;
       }else if(modId==='compress'){
         renderCompressPage(el, d.data);
+        return;
+      }else if(modId==='session'){
+        // 会话管理器引擎模块页 → 借用 hash-route 的 sessions API
+        renderSessionsPage(el);
         return;
       }else{
       for(const [k,v] of Object.entries(d)){

@@ -233,7 +233,7 @@ fn main() {
     let _ = engine.register_module(Box::new(
         MemoryModule::new(memory_data_base).with_names(&ai_name, &username)
     ));
-    let _ = engine.register_module(Box::new(SessionModule::new(1800)));
+    let _ = engine.register_module(Box::new(SessionModule::new(1800).with_session_path(profile_dir.clone())));
     let mut attn = AttentionModule::new();
     if let Some(ref cfg) = config {
         if let Some(ref emb_cfg) = cfg.embedding {
