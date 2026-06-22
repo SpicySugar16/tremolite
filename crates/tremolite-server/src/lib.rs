@@ -925,13 +925,40 @@ async fn handle_engine_mod(
                     "version": "0.4.0",
                 })
         }
-        "attention" => serde_json::json!({
-            "上下文窗口": "启用中",
-            "焦点指标": "正常",
-            "活跃会话": "1",
-            "注意力策略": "滑动窗口",
-            "版本": env!("CARGO_PKG_VERSION"),
-        }),
+        "attention" => {
+            let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
+            let app_config_path = profile_dir.join("config.toml");
+            let app_config = std::fs::read_to_string(&app_config_path).ok().unwrap_or_default();
+
+            let embedding_api = app_config.lines()
+                .find(|l| l.trim().starts_with("embedding_api_base"))
+                .and_then(|l| l.split('=').nth(1)).map(|s| s.trim().trim_matches('"').to_string())
+                .unwrap_or_else(|| "未配置".into());
+            let embedding_model = app_config.lines()
+                .find(|l| l.trim().starts_with("embedding_model"))
+                .and_then(|l| l.split('=').nth(1)).map(|s| s.trim().trim_matches('"').to_string())
+                .unwrap_or_else(|| "BAAI/bge-m3".into());
+
+            serde_json::json!({
+                "模块ID": "attention",
+                "版本": "0.2.0",
+                "状态": "运行中",
+                "embedding": {
+                    "api": embedding_api,
+                    "model": embedding_model,
+                    "has_embedding": !embedding_api.contains("未配置"),
+                },
+                "scales": [
+                    {"name": "Macro", "label": "宏观扫描", "window": 1000, "stride": 500, "max_blocks": 10, "description": "全局视野，覆盖长上下文"},
+                    {"name": "Focus", "label": "焦点缩放", "window": 200, "stride": 50, "max_blocks": 8, "description": "聚焦高分区域，定位关键段落"},
+                    {"name": "Micro", "label": "微观精炼", "window": 50, "stride": 10, "max_blocks": 5, "description": "微观细节，提取精确信息"},
+                    {"name": "Synthesis", "label": "综合合成", "window": 0, "stride": 0, "max_blocks": 0, "description": "跨尺度汇总，提炼结构知识"},
+                ],
+                "history_count": 0,
+                "last_scan": null,
+                "total_tokens_scanned": 0,
+            })
+        }
         "skill" => {
             let skill_count = std::fs::read_to_string(tremolite_dir.join("data").join("learn").join("skills.json")).ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())

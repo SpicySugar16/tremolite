@@ -1192,6 +1192,9 @@ async function renderModule(el,modId,statusData){
       }else if(modId==='memory'){
         renderMemoryPage(el, d.data);
         return;
+      }else if(modId==='attention'){
+        renderAttentionPage(el, d.data);
+        return;
       }else{
       for(const [k,v] of Object.entries(d)){
         if(k==='status')continue;
@@ -1415,6 +1418,80 @@ window.refreshMemoryPage=function(){
   api('/dashboard/engine/memory').then(function(d){
     if(d.status==='ok'&&d.data){
       renderMemoryPage(el,d.data);
+      if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
+    }else{
+      el.innerHTML='<div class="error">刷新失败</div>';
+    }
+  }).catch(function(e){
+    el.innerHTML='<div class="error">网络错误: '+esc(e.message)+'</div>';
+  });
+};
+
+// ─── Attention Page ────
+function renderAttentionPage(el, data){
+  if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
+  
+  const scales=data.scales||[];
+  const embedding=data.embedding||{};
+  const hasEmb=embedding.has_embedding||false;
+  const scalesLabel={'Macro':'宏观扫描','Focus':'焦点缩放','Micro':'微观精炼','Synthesis':'综合合成'};
+  const scalesColor={'Macro':'#4CAF50','Focus':'#2196F3','Micro':'#FF9800','Synthesis':'#9C27B0'};
+  
+  let html='';
+  
+  // 顶部双栏卡片
+  html+='<div class="grid-2">'+
+    '<div class="card"><div class="card-hd"><h3>🔍 多尺度注意力</h3></div>'+
+    '<div class="row"><span class="l">模块ID</span><span class="v">attention</span></div>'+
+    '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+
+    esc(data['状态']||'?')+'</span></span></div>'+
+    '<div class="row"><span class="l">版本</span><span class="v">'+
+    esc(data['版本']||'?')+'</span></div>'+
+    '<div class="row"><span class="l">历史记录</span><span class="v">'+
+    (data.history_count||0)+' 条</span></div>'+
+    '<div class="row"><span class="l">总扫描量</span><span class="v">'+
+    (data.total_tokens_scanned||0)+' token</span></div></div>'+
+    
+    '<div class="card"><div class="card-hd"><h3>🧠 Embedding 引擎</h3></div>'+
+    '<div class="row"><span class="l">状态</span><span class="v">'+
+    (hasEmb?'<span style="color:var(--green)">● 已配置</span>':'<span style="color:var(--fg3)">○ 未配置</span>')+'</span></div>'+
+    (hasEmb?'<div class="row"><span class="l">API</span><span class="v" style="font-size:0.7rem;font-family:var(--mono)">'+
+    esc(embedding.api||'')+'</span></div>':'')+
+    (hasEmb?'<div class="row"><span class="l">模型</span><span class="v">'+
+    esc(embedding.model||'')+'</span></div>':'')+
+    '</div></div>';
+  
+  // 四层尺度卡片
+  html+='<div class="card"><div class="card-hd"><h3>📐 注意力尺度</h3></div>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  for(var si=0;si<scales.length;si++){
+    var sc=scales[si];
+    html+='<div style="border:1px solid var(--bg3);border-radius:var(--radius-sm);padding:10px;background:var(--bg2);border-left:3px solid '+(scalesColor[sc.name]||'var(--accent)')+'">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
+      '<span style="font-size:0.82rem;font-weight:600;color:var(--fg)">'+esc(sc.label||sc.name)+'</span>'+
+      '<span style="font-size:0.65rem;color:var(--fg3);font-family:var(--mono)">'+sc.name+'</span></div>'+
+      '<div style="font-size:0.72rem;color:var(--fg2);margin-bottom:6px">'+esc(sc.description||'')+'</div>'+
+      '<div style="font-size:0.7rem;color:var(--fg3)">窗口 '+sc.window+' · 步长 '+sc.stride+' · 最多 '+(sc.max_blocks||'不限')+' 块</div>'+
+      '</div>';
+  }
+  html+='</div></div>';
+  
+  // 底部操作栏+版本号
+  html+='<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px">'+
+    '<button class="btn sm" onclick="refreshAttentionPage()">↻ 刷新</button>'+
+    '<span style="color:var(--fg3);font-size:0.72rem">attention 模块 v'+esc(data['版本']||'0.2.0')+'</span></div>';
+  
+  el.innerHTML=html;
+}
+
+window.refreshAttentionPage=function(){
+  var el=document.getElementById('pageContent');
+  var scroller=document.querySelector('.content');
+  var savedTop=scroller?scroller.scrollTop:0;
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  api('/dashboard/engine/attention').then(function(d){
+    if(d.status==='ok'&&d.data){
+      renderAttentionPage(el,d.data);
       if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
     }else{
       el.innerHTML='<div class="error">刷新失败</div>';
