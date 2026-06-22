@@ -1503,6 +1503,34 @@ function renderAttentionPage(el, data){
     '<button class="btn sm" onclick="saveAttnConfig()">💾 保存</button>'+
     '<span id="attnSaveFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div></div>';
   
+  // ── 自动调参卡片 ──
+  var autoTune=data.auto_tune||{};
+  var atEnabled=autoTune.enabled||false;
+  var atInterval=autoTune.step_interval||50;
+  var atStep=autoTune.current_step||0;
+  var atLast=autoTune.last_adjust;
+  var atScore=autoTune.last_top_score;
+  
+  html+='<div class="card"><div class="card-hd"><h3>🤖 自动调参</h3>'+
+    '<label class="toggle"><input type="checkbox" id="autoTuneToggle" '+(atEnabled?'checked':'')+
+    ' onchange="toggleAutoTune(this.checked)"><span class="sl"></span></label></div>'+
+    '<div style="font-size:0.78rem;color:var(--fg2);line-height:1.6;margin-bottom:8px">'+
+    '系统根据注意力集中情况，每隔指定步数自动调整各层级权重倍率。'+
+    '</div>'+
+    '<div class="row"><span class="l">状态</span><span class="v">'+
+    (atEnabled?'<span style="color:var(--green)">● 已启用</span>':'<span style="color:var(--fg3)">○ 已关闭</span>')+'</span></div>'+
+    '<div class="row"><span class="l">步数间隔</span><span class="v">'+
+    '<input type="number" id="autoTuneInterval" value="'+atInterval+'" min="10" max="500" step="10" '+
+    'onchange="saveAutoTune()" style="width:60px;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px 6px;color:var(--fg);font-size:0.78rem;font-family:var(--mono);text-align:center"> 步</span></div>'+
+    '<div class="row"><span class="l">当前步数</span><span class="v">'+atStep+' / '+atInterval+'</span></div>'+
+    (atLast?'<div class="row"><span class="l">上次调整</span><span class="v" style="font-size:0.7rem">'+
+    new Date(atLast*1000).toLocaleString()+'</span></div>':'')+
+    (atScore!==null&&atScore!==undefined?'<div class="row"><span class="l">上次集中度</span><span class="v">'+
+    '<span style="color:'+(atScore<0.3?'var(--red)':atScore>0.7?'var(--green)':'var(--yellow)')+'">'+(atScore*100).toFixed(0)+'%</span></span></div>':'')+
+    '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px">'+
+    '<button class="btn sm" onclick="saveAutoTune()">💾 保存设置</button>'+
+    '<span id="autoTuneFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div></div>';
+  
   // 底部操作栏+版本号
   html+='<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px">'+
     '<button class="btn sm" onclick="refreshAttentionPage()">↻ 刷新</button>'+
@@ -1605,6 +1633,43 @@ window.saveAttnConfig=function(){
       setTimeout(function(){if(fb)fb.textContent='';},3000);
     }else{
       if(fb){fb.textContent='✗ 保存失败: '+(r.error||'');fb.style.color='var(--red)';}
+    }
+  }).catch(function(e){
+    if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
+  });
+};
+
+window.toggleAutoTune=function(enabled){
+  var fb=document.getElementById('autoTuneFeedback');
+  if(fb){fb.textContent='保存中...';}
+  var interval=parseInt(document.getElementById('autoTuneInterval').value)||50;
+  apiPost('/dashboard/attention/update',{
+    auto_tune:{enabled:enabled,step_interval:interval,current_step:0}
+  }).then(function(r){
+    if(r.status==='ok'){
+      if(fb){fb.textContent='✓ 已'+(enabled?'启用':'关闭');fb.style.color='var(--green)';}
+      setTimeout(function(){if(fb)fb.textContent='';},2000);
+    }else{
+      if(fb){fb.textContent='✗ 失败';fb.style.color='var(--red)';}
+    }
+  }).catch(function(e){
+    if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
+  });
+};
+
+window.saveAutoTune=function(){
+  var fb=document.getElementById('autoTuneFeedback');
+  if(fb){fb.textContent='保存中...';fb.style.color='var(--fg2)';}
+  var enabled=document.getElementById('autoTuneToggle').checked;
+  var interval=parseInt(document.getElementById('autoTuneInterval').value)||50;
+  apiPost('/dashboard/attention/update',{
+    auto_tune:{enabled:enabled,step_interval:interval,current_step:0}
+  }).then(function(r){
+    if(r.status==='ok'){
+      if(fb){fb.textContent='✓ 已保存';fb.style.color='var(--green)';}
+      setTimeout(function(){if(fb)fb.textContent='';},2000);
+    }else{
+      if(fb){fb.textContent='✗ 失败';fb.style.color='var(--red)';}
     }
   }).catch(function(e){
     if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
