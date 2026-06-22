@@ -966,11 +966,19 @@ async function renderSessions(el,d){
         '<div class="row"><span class="l">配置来源</span><span class="v" style="font-size:0.65rem;font-family:var(--mono);color:var(--fg3)">'+
         esc(stats.config_source||'')+'</span></div></div></div>';
       
-      // 超时配置卡片
+      // 超时配置卡片——可编辑
       html+='<div class="card"><div class="card-hd"><h3>⏱ 会话超时配置</h3></div>'+
-        '<div class="row"><span class="l">闲置冷却</span><span class="v">'+(cfg.idle_timeout_human||'300秒')+'</span></div>'+
-        '<div class="row"><span class="l">清理保留</span><span class="v">'+(cfg.cleanup_timeout_human||'30天')+'</span></div>'+
-        '<div class="row"><span class="l">环容量</span><span class="v">'+(cfg.max_rings||20)+' 条</span></div></div>';
+        '<div class="dim-row"><div class="dim-label" style="width:70px;text-align:left;font-size:0.78rem;color:var(--fg2)">闲置冷却</div>'+
+        '<input type="number" id="sessionCfgIdle" class="dim-input" value="'+(Math.round((cfg.idle_timeout||300)/60))+'" min="1" max="1440" onchange="autoSaveSessionCfg()">'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">分钟</span></div>'+
+        '<div class="dim-row"><div class="dim-label" style="width:70px;text-align:left;font-size:0.78rem;color:var(--fg2)">清理保留</div>'+
+        '<input type="number" id="sessionCfgCleanup" class="dim-input" value="'+(Math.round((cfg.cleanup_timeout||2592000)/86400))+'" min="1" max="365" onchange="autoSaveSessionCfg()">'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">天</span></div>'+
+        '<div class="dim-row"><div class="dim-label" style="width:70px;text-align:left;font-size:0.78rem;color:var(--fg2)">环容量</div>'+
+        '<input type="number" id="sessionCfgRings" class="dim-input" value="'+(cfg.max_rings||20)+'" min="5" max="100" onchange="autoSaveSessionCfg()">'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">条</span></div>'+
+        '<div style="display:flex;justify-content:flex-end;gap:4px;margin-top:4px">'+
+        '<span id="sessionCfgFeedback" style="font-size:0.72rem;color:var(--green);line-height:28px"></span></div></div>';
       
       // 会话列表表格
       var sessions=r.sessions||[];
@@ -1004,6 +1012,44 @@ async function renderSessions(el,d){
 // 引擎模块页包装——无参版，供 renderModule({modId:'session'}) 调用
 window.renderSessionsPage = async function(el){
   return renderSessions(el, {});
+};
+
+// ─── 会话配置自动保存 ────
+var sessionCfgDebounce=null;
+window.autoSaveSessionCfg=function(){
+  clearTimeout(sessionCfgDebounce);
+  var fb=document.getElementById('sessionCfgFeedback');
+  if(fb) fb.textContent='正在保存……';
+  sessionCfgDebounce=setTimeout(async function(){
+    var data={
+      idle_timeout_minutes: parseFloat(document.getElementById('sessionCfgIdle').value)||5,
+      cleanup_timeout_days: parseFloat(document.getElementById('sessionCfgCleanup').value)||30,
+      max_rings: parseFloat(document.getElementById('sessionCfgRings').value)||20,
+    };
+    try{
+      var r=await apiPost('/dashboard/session/config', data);
+      if(fb) fb.textContent=r.status==='ok'?'✓ 已保存':'保存失败';
+    }catch(e){
+      if(fb) fb.textContent='保存失败';
+    }
+    setTimeout(function(){if(fb) fb.textContent='';},2000);
+    refreshSessionPage();
+  }, 800);
+};
+
+// ─── 刷新会话页面 ────
+window.refreshSessionPage=async function(){
+  var el=document.getElementById('pageContent');
+  var scroller=document.querySelector('.content');
+  var savedTop=scroller?scroller.scrollTop:0;
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  try{
+    var r=await api('/dashboard/sessions');
+    if(r.status==='ok'){
+      await renderSessions(el, {});
+      if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
+    }
+  }catch(e){}
 };
 
 // ─── Logs Page ────

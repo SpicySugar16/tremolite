@@ -145,6 +145,7 @@ async fn run_server_inner(
         .route("/dashboard/config/profile", get(handle_profile_get).post(handle_profile_set))
         .route("/dashboard/attention/update", post(handle_attention_update))
         .route("/dashboard/compress/exec", post(handle_compress_exec))
+        .route("/dashboard/session/config", post(handle_session_config_save))
         .route("/dashboard/config/check", get(handle_config_check))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
@@ -2925,6 +2926,52 @@ async fn handle_compress_exec(
         "status": "ok",
         "message": "压缩命令已发送",
     }))
+}
+
+async fn handle_session_config_save(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("modules").join("session.toml");
+    
+    let mut idle_timeout: u64 = 300;
+    let mut cleanup_timeout: u64 = 2592000;
+    let mut max_rings: u64 = 20;
+    
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Ok(toml_val) = content.parse::<toml::Value>() {
+            if let Some(cfg) = toml_val.get("session") {
+                idle_timeout = cfg.get("idle_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(300);
+                cleanup_timeout = cfg.get("cleanup_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(2592000);
+                max_rings = cfg.get("max_rings").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(20);
+            }
+        }
+    }
+    
+    if let Some(val) = payload.get("idle_timeout_minutes").and_then(|v| v.as_f64()) {
+        idle_timeout = (val * 60.0) as u64;
+    }
+    if let Some(val) = payload.get("cleanup_timeout_days").and_then(|v| v.as_f64()) {
+        cleanup_timeout = (val * 86400.0) as u64;
+    }
+    if let Some(val) = payload.get("max_rings").and_then(|v| v.as_f64()) {
+        max_rings = val as u64;
+    }
+    
+    let content = format!(
+        "[session]\nidle_timeout = {}\ncleanup_timeout = {}\nmax_rings = {}\n",
+        idle_timeout, cleanup_timeout, max_rings
+    );
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(&config_path, content) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "message": "配置已保存"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("保存失败: {}", e)})),
+    }
 }
 
 /// 确定记忆文件目录（优先配置包，回退 data 目录）
