@@ -1431,22 +1431,26 @@ window.refreshMemoryPage=function(){
 function renderAttentionPage(el, data){
   if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
   
-  const scales=data.scales||[];
+  const channels=data.channels||[];
   const embedding=data.embedding||{};
   const hasEmb=embedding.has_embedding||false;
-  const scalesLabel={'Macro':'宏观扫描','Focus':'焦点缩放','Micro':'微观精炼','Synthesis':'综合合成'};
-  const scalesColor={'Macro':'#4CAF50','Focus':'#2196F3','Micro':'#FF9800','Synthesis':'#9C27B0'};
+  var channelColors={'wide':'#4CAF50','focus':'#2196F3','micro':'#FF9800'};
+  var chatTypeLabels={'focus_discussion':'聚焦讨论','topic_shift':'话题跳转','scattered':'离散碎语'};
   
   let html='';
   
   // 顶部双栏卡片
   html+='<div class="grid-2">'+
-    '<div class="card"><div class="card-hd"><h3>🔍 多尺度注意力</h3></div>'+
+    '<div class="card"><div class="card-hd"><h3>🔍 链式注意力</h3></div>'+
     '<div class="row"><span class="l">模块ID</span><span class="v">attention</span></div>'+
     '<div class="row"><span class="l">状态</span><span class="v"><span class="badge-accent">'+
     esc(data['状态']||'?')+'</span></span></div>'+
     '<div class="row"><span class="l">版本</span><span class="v">'+
     esc(data['版本']||'?')+'</span></div>'+
+    '<div class="row"><span class="l">链深度</span><span class="v">'+
+    (data.chain_depth||0)+' / '+channels.length+'</span></div>'+
+    '<div class="row"><span class="l">对话类型</span><span class="v">'+
+    esc(chatTypeLabels[data.chat_type]||data.chat_type||'?')+'</span></div>'+
     '<div class="row"><span class="l">历史记录</span><span class="v">'+
     (data.history_count||0)+' 条</span></div>'+
     '<div class="row"><span class="l">总扫描量</span><span class="v">'+
@@ -1460,35 +1464,41 @@ function renderAttentionPage(el, data){
     (hasEmb?'<div class="row"><span class="l">模型</span><span class="v">'+
     esc(embedding.model||'')+'</span></div>':'')+
     '</div></div>';
-  
-  // 四层尺度卡片
-  html+='<div class="card"><div class="card-hd"><h3>📐 注意力尺度</h3></div>'+
+
+  // 当前注入内容卡片
+  var injected = data.injected_prompt||'';
+  html+='<div class="card"><div class="card-hd"><h3>📨 当前注入</h3></div>'+
+    '<div style="font-family:var(--mono);font-size:0.82rem;color:'+(injected?'var(--accent)':'var(--fg3)')+'">'+
+    esc(injected||'（暂无注入）')+'</div></div>';
+
+  // 通道卡片
+  html+='<div class="card"><div class="card-hd"><h3>📐 注意力通道</h3></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  for(var si=0;si<scales.length;si++){
-    var sc=scales[si];
-    html+='<div style="border:1px solid var(--bg3);border-radius:var(--radius-sm);padding:10px;background:var(--bg2);border-left:3px solid '+(scalesColor[sc.name]||'var(--accent)')+'">'+
+  for(var si=0;si<channels.length;si++){
+    var ch=channels[si];
+    html+='<div style="border:1px solid var(--bg3);border-radius:var(--radius-sm);padding:10px;background:var(--bg2);border-left:3px solid '+(channelColors[ch.name]||'var(--accent)')+'">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'+
-      '<span style="font-size:0.82rem;font-weight:600;color:var(--fg)">'+esc(sc.label||sc.name)+'</span>'+
-      '<span style="font-size:0.65rem;color:var(--fg3);font-family:var(--mono)">'+sc.name+'</span></div>'+
-      '<div style="font-size:0.72rem;color:var(--fg2);margin-bottom:6px">'+esc(sc.description||'')+'</div>'+
-      '<div style="font-size:0.7rem;color:var(--fg3)">窗口 '+sc.window+' · 步长 '+sc.stride+' · 最多 '+(sc.max_blocks||'不限')+' 块</div>'+
+      '<span style="font-size:0.82rem;font-weight:600;color:var(--fg)">'+esc(ch.label||ch.name)+'</span>'+
+      '<span style="font-size:0.65rem;color:var(--fg3);font-family:var(--mono)">'+ch.name+'</span></div>'+
+      '<div style="font-size:0.72rem;color:var(--fg2);margin-bottom:6px">'+esc(ch.description||'')+'</div>'+
+      '<div style="font-size:0.7rem;color:var(--fg3)">窗口 '+ch.window+' · 步长 '+ch.stride+' · 最多 '+(ch.max_blocks||'不限')+' 块 · 阈值 '+(ch.threshold!==undefined?(ch.threshold*100).toFixed(0):'?')+'%</div>'+
       '</div>';
   }
   html+='</div></div>';
   
   // ── 权重编辑卡片 ──
-  var weights=data.weights||{macro:1.0,focus:2.0,micro:3.0,synthesis:1.5};
-  var weightKeys=['macro','focus','micro','synthesis'];
-  var weightLabels={'macro':'Macro 宏观','focus':'Focus 焦点','micro':'Micro 微观','synthesis':'Synthesis 综合'};
-  var weightColors={'macro':'#4CAF50','focus':'#2196F3','micro':'#FF9800','synthesis':'#9C27B0'};
-  html+='<div class="card"><div class="card-hd"><h3>⚖️ 注意力层级倍率</h3></div><div style="display:flex;flex-direction:column;gap:6px">';
+  var weights=data.weights||{wide:1.0,focus:2.0,micro:3.0};
+  var weightKeys=['wide','focus','micro'];
+  var weightLabels={'wide':'Wide 全局','focus':'Focus 焦点','micro':'Micro 微观'};
+  var weightColors={'wide':'#4CAF50','focus':'#2196F3','micro':'#FF9800'};
+  html+='<div class="card"><div class="card-hd"><h3>⚖️ 通道倍率</h3></div><div style="display:flex;flex-direction:column;gap:6px">';
   for(var wi=0;wi<weightKeys.length;wi++){
     var wk=weightKeys[wi];
     html+='<div class="dim-row"><div class="dim-label" style="width:90px;text-align:left;font-size:0.78rem;color:var(--fg2);border-left:3px solid '+(weightColors[wk]||'var(--accent)')+';padding-left:6px">'+esc(weightLabels[wk])+'</div>'+
       '<input type="range" class="dim-slider" min="0" max="5" step="0.1" value="'+(weights[wk]||1.0)+'" data-attn-weight="'+wk+'" oninput="updateAttnWeightSlider(this)">'+
       '<input type="number" class="dim-input" min="0" max="5" step="0.1" value="'+(weights[wk]||1.0).toFixed(1)+'" onchange="updateAttnWeightNumber(this,\''+wk+'\')" style="width:48px"></div>';
   }
-  html+='<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">倍率影响各层级在合成时的加权重要性。</div></div></div>';
+  html+='<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">倍率影响各通道在合成时的加权重要性。</div></div></div>';
   
   // ── Embedding 配置卡片 ──
   var emb=data.embedding||{};
@@ -1515,7 +1525,7 @@ function renderAttentionPage(el, data){
     '<label class="toggle"><input type="checkbox" id="autoTuneToggle" '+(atEnabled?'checked':'')+
     ' onchange="toggleAutoTune(this.checked)"><span class="sl"></span></label></div>'+
     '<div style="font-size:0.78rem;color:var(--fg2);line-height:1.6;margin-bottom:8px">'+
-    '系统根据注意力集中情况，每隔指定步数自动调整各层级权重倍率。'+
+    '系统根据注意力集中情况，每隔指定步数自动调整各通道权重倍率。'+
     '</div>'+
     '<div class="row"><span class="l">状态</span><span class="v">'+
     (atEnabled?'<span style="color:var(--green)">● 已启用</span>':'<span style="color:var(--fg3)">○ 已关闭</span>')+'</span></div>'+
@@ -1534,7 +1544,7 @@ function renderAttentionPage(el, data){
   // 底部操作栏+版本号
   html+='<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px">'+
     '<button class="btn sm" onclick="refreshAttentionPage()">↻ 刷新</button>'+
-    '<span style="color:var(--fg3);font-size:0.72rem">attention 模块 v'+esc(data['版本']||'0.2.0')+'</span></div>';
+    '<span style="color:var(--fg3);font-size:0.72rem">attention 模块 v'+esc(data['版本']||'1.0.0')+'</span></div>';
   
   el.innerHTML=html;
 }

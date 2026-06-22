@@ -959,10 +959,9 @@ async fn handle_engine_mod(
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|v| v.get("weights").cloned())
                 .unwrap_or(serde_json::json!({
-                    "macro": 1.0,
+                    "wide": 1.0,
                     "focus": 2.0,
                     "micro": 3.0,
-                    "synthesis": 1.5,
                 }));
 
             let mut auto_tune = std::fs::read_to_string(&attn_weight_path).ok()
@@ -979,24 +978,16 @@ async fn handle_engine_mod(
             if let Some(true) = auto_tune.get("enabled").and_then(|v| v.as_bool()) {
                 let interval = auto_tune.get("step_interval").and_then(|v| v.as_u64()).unwrap_or(50);
                 let step = auto_tune.get("current_step").and_then(|v| v.as_u64()).unwrap_or(0);
+                let stats_path = profile_dir.join("attention_stats.json");
+                let real_top_score = std::fs::read_to_string(&stats_path).ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| v.get("last_scan").and_then(|ls| ls.get("top_score")).and_then(|ts| ts.as_f64()));
                 if step >= interval {
                     let mut weights_map = match &attention_weights {
                         serde_json::Value::Object(m) => m.clone(),
                         _ => serde_json::Map::new(),
                     };
-                    let rng_sim = (std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() % 1000) as f64 / 1000.0;
-                    let avg_weight = weights_map.values()
-                        .filter_map(|v| v.as_f64())
-                        .sum::<f64>() / weights_map.len().max(1) as f64;
-                    let dispersion = weights_map.values()
-                        .filter_map(|v| v.as_f64())
-                        .map(|w| (w - avg_weight).abs())
-                        .sum::<f64>() / weights_map.len().max(1) as f64;
-                    let base_score = (0.3 + dispersion * 0.15).min(0.8);
-                    let top_score = (base_score + rng_sim * 0.2 - 0.1).clamp(0.1, 0.9);
+                    let top_score = real_top_score.unwrap_or(0.5);
                     for (_, v) in weights_map.iter_mut() {
                         if let Some(w) = v.as_f64() {
                             let factor = if top_score < 0.3 {
@@ -1004,7 +995,7 @@ async fn handle_engine_mod(
                             } else if top_score > 0.7 {
                                 0.95
                             } else {
-                                1.0 + (rng_sim - 0.5) * 0.04
+                                1.0
                             };
                             let new_w = (w * factor).clamp(0.1, 5.0);
                             *v = serde_json::Value::Number(serde_json::Number::from_f64(
@@ -1051,48 +1042,62 @@ async fn handle_engine_mod(
                 }
             }
 
-            // 读取 attention stats
+            // 从 modules/attention.toml 读取通道配置
+            let attention_config_path = profile_dir.join("modules").join("attention.toml");
+            let channels: Vec<serde_json::Value> = std::fs::read_to_string(&attention_config_path).ok()
+                .and_then(|s| {
+                    let v: toml::Value = s.parse().ok()?;
+                    v.get("attention")?.get("channels")?.as_array().map(|arr| {
+                        arr.iter().map(|ch| {
+                            let name = ch.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                            let label = ch.get("label").and_then(|n| n.as_str()).unwrap_or(name);
+                            let window = ch.get("window").and_then(|n| n.as_integer()).unwrap_or(200) as u64;
+                            let stride = ch.get("stride").and_then(|n| n.as_integer()).unwrap_or(50) as u64;
+                            let max_blocks = ch.get("max_blocks").and_then(|n| n.as_integer()).unwrap_or(5) as u64;
+                            let threshold = ch.get("threshold").and_then(|n| n.as_float()).unwrap_or(0.5);
+                            serde_json::json!({
+                                "name": name,
+                                "label": label,
+                                "window": window,
+                                "stride": stride,
+                                "max_blocks": max_blocks,
+                                "threshold": (threshold * 100.0).round() / 100.0,
+                                "description": format!("窗口 {} · 步长 {} · 阈值 {:.0}%", window, stride, threshold * 100.0),
+                            })
+                        }).collect::<Vec<_>>()
+                    })
+                })
+                .unwrap_or_else(|| vec![
+                    serde_json::json!({"name": "wide", "label": "全局视野", "window": 1000, "stride": 500, "max_blocks": 10, "threshold": 0.3, "description": "窗口 1000 · 步长 500 · 阈值 30%"}),
+                    serde_json::json!({"name": "focus", "label": "焦点缩放", "window": 200, "stride": 50, "max_blocks": 8, "threshold": 0.5, "description": "窗口 200 · 步长 50 · 阈值 50%"}),
+                    serde_json::json!({"name": "micro", "label": "微观精炼", "window": 50, "stride": 10, "max_blocks": 5, "threshold": 0.6, "description": "窗口 50 · 步长 10 · 阈值 60%"}),
+                ]);
+
+            // 读取 attention stats（只读，不写模拟数据）
             let stats_path = profile_dir.join("attention_stats.json");
+            let stats_default = serde_json::json!({
+                "history_count": 0,
+                "total_tokens_scanned": 0,
+                "last_scan": null,
+            });
             if !stats_path.exists() {
-                let initial = serde_json::json!({
-                    "history_count": 0,
-                    "total_tokens_scanned": 0,
-                    "last_scan": null,
-                });
-                let _ = std::fs::write(&stats_path, serde_json::to_string_pretty(&initial).unwrap());
+                let _ = std::fs::write(&stats_path, serde_json::to_string_pretty(&stats_default).unwrap());
             }
             let stats = std::fs::read_to_string(&stats_path).ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .unwrap_or(serde_json::json!({
-                    "history_count": 0,
-                    "total_tokens_scanned": 0,
-                    "last_scan": null,
-                }));
-            // 每次访问时刷新 last_scan 时间戳（模拟活跃状态的统计数据）
-            let now_ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let mut stats_mut = stats.clone();
-            if let Some(obj) = stats_mut.as_object_mut() {
-                let cur_count = obj.get("history_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                obj.insert("history_count".into(), serde_json::json!(cur_count + 1));
-                obj.insert("total_tokens_scanned".into(), serde_json::json!(1024));
-                obj.insert("last_scan".into(), serde_json::json!({
-                    "timestamp": now_ts,
-                    "top_score": 0.54,
-                    "top_entities": ["神大人", "葵"],
-                }));
-                let _ = std::fs::write(&stats_path, serde_json::to_string_pretty(&stats_mut).unwrap());
-            }
-            let history_count = stats_mut.get("history_count").and_then(|v| v.as_u64()).unwrap_or(1);
-            let total_scanned = stats_mut.get("total_tokens_scanned").and_then(|v| v.as_u64()).unwrap_or(1024);
-            let last_scan = stats_mut.get("last_scan").cloned().unwrap_or(serde_json::Value::Null);
+                .unwrap_or(stats_default.clone());
+            let history_count = stats.get("history_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let total_scanned = stats.get("total_tokens_scanned").and_then(|v| v.as_u64()).unwrap_or(0);
+            let last_scan = stats.get("last_scan").cloned().unwrap_or(serde_json::Value::Null);
+            let chain_depth = last_scan.get("chain_depth").and_then(|v| v.as_u64()).unwrap_or(0);
+            let chat_type = last_scan.get("chat_type").and_then(|v| v.as_str()).unwrap_or("scattered");
 
             serde_json::json!({
                 "模块ID": "attention",
-                "版本": "0.2.0",
+                "版本": "1.0.0",
                 "状态": "运行中",
+                "chain_depth": chain_depth,
+                "chat_type": chat_type,
                 "embedding": {
                     "api_base": embedding_api_base,
                     "api_key_mask": embedding_key_mask,
@@ -1102,15 +1107,11 @@ async fn handle_engine_mod(
                 },
                 "weights": attention_weights,
                 "auto_tune": auto_tune,
-                "scales": [
-                    {"name": "Macro", "label": "宏观扫描", "window": 1000, "stride": 500, "max_blocks": 10, "description": "全局视野，覆盖长上下文"},
-                    {"name": "Focus", "label": "焦点缩放", "window": 200, "stride": 50, "max_blocks": 8, "description": "聚焦高分区域，定位关键段落"},
-                    {"name": "Micro", "label": "微观精炼", "window": 50, "stride": 10, "max_blocks": 5, "description": "微观细节，提取精确信息"},
-                    {"name": "Synthesis", "label": "综合合成", "window": 0, "stride": 0, "max_blocks": 0, "description": "跨尺度汇总，提炼结构知识"},
-                ],
+                "channels": channels,
                 "history_count": history_count,
                 "last_scan": last_scan,
                 "total_tokens_scanned": total_scanned,
+                "injected_prompt": std::fs::read_to_string(profile_dir.join("attention_inject_log.txt")).ok().unwrap_or_default(),
             })
         }
         "skill" => {
@@ -2694,7 +2695,7 @@ async fn handle_attention_update(
             .unwrap_or(serde_json::json!({}));
         current["auto_tune"] = at.clone();
         if !current.as_object().map(|o| o.contains_key("weights")).unwrap_or(false) {
-            current["weights"] = serde_json::json!({"macro": 1.0, "focus": 2.0, "micro": 3.0, "synthesis": 1.5});
+            current["weights"] = serde_json::json!({"wide": 1.0, "focus": 2.0, "micro": 3.0});
         }
         match std::fs::write(&attn_path, serde_json::to_string_pretty(&current).unwrap()) {
             Ok(_) => tracing::info!("attention: auto_tune配置已保存"),

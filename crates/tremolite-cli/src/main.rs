@@ -242,6 +242,33 @@ fn main() {
             }
         }
     }
+    // 从 modules/attention.toml 加载通道配置
+    let attention_mod_path = profile_dir.join("modules").join("attention.toml");
+    if let Ok(content) = std::fs::read_to_string(&attention_mod_path) {
+        if let Ok(toml_val) = content.parse::<toml::Value>() {
+            if let Some(attn_section) = toml_val.get("attention") {
+                // 读取通道列表
+                if let Some(channels_arr) = attn_section.get("channels").and_then(|v| v.as_array()) {
+                    let channels: Vec<tremolite_attention::Channel> = channels_arr.iter().filter_map(|ch| {
+                        let name = ch.get("name")?.as_str()?;
+                        let label = ch.get("label").and_then(|v| v.as_str()).unwrap_or(name);
+                        let window = ch.get("window")?.as_integer()? as usize;
+                        let stride = ch.get("stride")?.as_integer()? as usize;
+                        let max_blocks = ch.get("max_blocks")?.as_integer()? as usize;
+                        let threshold = ch.get("threshold")?.as_float()?;
+                        Some(tremolite_attention::Channel::new(name, label, window, stride, max_blocks, threshold))
+                    }).collect();
+                    if !channels.is_empty() {
+                        attn = attn.with_channels(channels);
+                    }
+                }
+                // 读取注入冷却设置
+                if let Some(cooldown) = attn_section.get("inject_cooldown_rounds").and_then(|v| v.as_integer()) {
+                    attn = attn.with_inject_cooldown(cooldown as u32);
+                }
+            }
+        }
+    }
     let _ = engine.register_module(Box::new(attn));
 
     // 注入 attention stats 路径——让每次扫描后持久化统计信息
@@ -253,6 +280,15 @@ fn main() {
                 .and_then(|a| a.downcast_mut::<tremolite_core::AttentionModule>())
             {
                 a.set_stats_path(&attn_stats_str);
+            }
+        });
+        let inject_log_path = profile_dir.join("attention_inject_log.txt");
+        let inject_log_str = inject_log_path.to_string_lossy().to_string();
+        let _ = engine.modules.with_module_mut("attention", |m| {
+            if let Some(a) = m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::AttentionModule>())
+            {
+                a.set_inject_log_path(&inject_log_str);
             }
         });
         // 生成初始 stats 文件（如果不存在）
