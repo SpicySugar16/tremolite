@@ -187,13 +187,16 @@ impl Default for MultiScaleAttention {
 
 impl MultiScaleAttention {
     pub fn new() -> Self {
+        let stats_path = Some(std::path::PathBuf::from(
+            "/home/spicysugar/.tremolite/profiles/main/attention_stats.json"
+        ));
         Self {
             attention_history: Vec::new(),
             max_history: 100,
             embedding: None,
             cached_query_embedding: None,
             cached_query_text: String::new(),
-            stats_path: None,
+            stats_path,
         }
     }
 

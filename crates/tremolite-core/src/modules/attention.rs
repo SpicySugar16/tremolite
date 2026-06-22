@@ -57,12 +57,11 @@ impl Module for AttentionModule {
     }
 
     fn on_event(&mut self, event: &Event, _ctx: &EventContext) -> Result<EventResponse, ModuleError> {
-        // 注意：attend() 同步调外部 embedding API 会阻塞模块注册表锁，
-        // 导致其他 worker 无法访问任何模块（含 MemoryModule）。
-        // 注意力扫描后续通过独立的方法或定时任务触发。
-        // 当前 on_event 不做任何阻塞操作。
-        if let Event::OnMessage { .. } = event {
-            // 留空——注意力扫描由外部工具或 cron 触发
+        if let Event::OnMessage { input, .. } = event {
+            if !input.trim().is_empty() {
+                let result = self.engine.attend(input);
+                self.last_summary = result.synthesis.summary.clone();
+            }
         }
         Ok(EventResponse::Pass)
     }
