@@ -143,6 +143,7 @@ async fn run_server_inner(
         .route("/dashboard/engine/memory/update", post(handle_memory_update))
         .route("/dashboard/engine/memory/paths", get(handle_memory_paths))
         .route("/dashboard/config/profile", get(handle_profile_get).post(handle_profile_set))
+        .route("/dashboard/attention/update", post(handle_attention_update))
         .route("/dashboard/config/check", get(handle_config_check))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
@@ -930,24 +931,52 @@ async fn handle_engine_mod(
             let app_config_path = profile_dir.join("config.toml");
             let app_config = std::fs::read_to_string(&app_config_path).ok().unwrap_or_default();
 
-            let embedding_api = app_config.lines()
-                .find(|l| l.trim().starts_with("embedding_api_base"))
+            let embedding_api_base = app_config.lines()
+                .find(|l| l.trim().starts_with("api_base") || l.trim().starts_with("embedding_api_base"))
                 .and_then(|l| l.split('=').nth(1)).map(|s| s.trim().trim_matches('"').to_string())
                 .unwrap_or_else(|| "未配置".into());
+            let embedding_key = app_config.lines()
+                .find(|l| l.trim().starts_with("api_key") || l.trim().starts_with("embedding_api_key") || l.trim().starts_with("api_key"))
+                .and_then(|l| l.split('=').nth(1)).map(|s| s.trim().trim_matches('"').to_string())
+                .unwrap_or_default();
+            let has_embedding_key = !embedding_key.is_empty();
+            let embedding_key_mask = if embedding_key.len() > 10 {
+                let prefix = &embedding_key[..4];
+                let suffix = &embedding_key[embedding_key.len()-4..];
+                format!("{}***{}", prefix, suffix)
+            } else if !embedding_key.is_empty() {
+                "***已配置***".to_string()
+            } else {
+                String::new()
+            };
             let embedding_model = app_config.lines()
-                .find(|l| l.trim().starts_with("embedding_model"))
+                .find(|l| l.trim().starts_with("model") || l.trim().starts_with("embedding_model"))
                 .and_then(|l| l.split('=').nth(1)).map(|s| s.trim().trim_matches('"').to_string())
                 .unwrap_or_else(|| "BAAI/bge-m3".into());
+
+            let attn_weight_path = profile_dir.join("attention.json");
+            let attention_weights = std::fs::read_to_string(&attn_weight_path).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| v.get("weights").cloned())
+                .unwrap_or(serde_json::json!({
+                    "macro": 1.0,
+                    "focus": 2.0,
+                    "micro": 3.0,
+                    "synthesis": 1.5,
+                }));
 
             serde_json::json!({
                 "模块ID": "attention",
                 "版本": "0.2.0",
                 "状态": "运行中",
                 "embedding": {
-                    "api": embedding_api,
+                    "api_base": embedding_api_base,
+                    "api_key_mask": embedding_key_mask,
                     "model": embedding_model,
-                    "has_embedding": !embedding_api.contains("未配置"),
+                    "has_embedding": has_embedding_key,
+                    "configured": has_embedding_key,
                 },
+                "weights": attention_weights,
                 "scales": [
                     {"name": "Macro", "label": "宏观扫描", "window": 1000, "stride": 500, "max_blocks": 10, "description": "全局视野，覆盖长上下文"},
                     {"name": "Focus", "label": "焦点缩放", "window": 200, "stride": 50, "max_blocks": 8, "description": "聚焦高分区域，定位关键段落"},
@@ -2513,6 +2542,84 @@ async fn handle_memory_paths() -> Json<serde_json::Value> {
         "expected_profile_path": std::path::Path::new(&home).join(".tremolite/profiles/aoi/data/memory").to_string_lossy().to_string(),
         "files": files,
     }))
+}
+
+// ─── Handler: 保存注意力配置 ──────────────────
+async fn handle_attention_update(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tremolite_dir = std::path::Path::new(&home).join(".tremolite");
+    let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
+
+    if let Some(weights) = body.get("weights") {
+        let attn_json = serde_json::json!({ "weights": weights });
+        let attn_path = profile_dir.join("attention.json");
+        match std::fs::write(&attn_path, serde_json::to_string_pretty(&attn_json).unwrap()) {
+            Ok(_) => tracing::info!("attention: 权重已保存到 {:?}", attn_path),
+            Err(e) => return Json(serde_json::json!({ "status": "error", "error": format!("写入attention.json失败: {e}") })),
+        }
+    }
+
+    if let Some(emb) = body.get("embedding") {
+        let config_path = profile_dir.join("config.toml");
+        let content = std::fs::read_to_string(&config_path).ok().unwrap_or_default();
+
+        let api_base = emb.get("api_base").and_then(|v| v.as_str()).unwrap_or("");
+        let api_key = emb.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+        let model = emb.get("model").and_then(|v| v.as_str()).unwrap_or("BAAI/bge-m3");
+
+        let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        let mut in_embedding = false;
+        let mut embedding_start = None;
+        let mut embedding_end = None;
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if trimmed == "[embedding]" {
+                in_embedding = true;
+                embedding_start = Some(i);
+                continue;
+            }
+            if in_embedding {
+                if trimmed.starts_with('[') {
+                    embedding_end = Some(i);
+                    break;
+                }
+            }
+        }
+        if !in_embedding {
+            if !api_base.is_empty() || !api_key.is_empty() {
+                lines.push(String::new());
+                lines.push("[embedding]".to_string());
+                if !api_base.is_empty() { lines.push(format!("api_base = \"{}\"", api_base)); }
+                lines.push(format!("api_key = \"{}\"", api_key));
+                lines.push(format!("model = \"{}\"", model));
+            }
+        } else {
+            let end = embedding_end.unwrap_or(lines.len());
+            if let Some(start) = embedding_start {
+                let remove_count = end - start - 1;
+                if remove_count > 0 {
+                    lines.drain(start+1..end);
+                }
+                let mut new_lines = Vec::new();
+                if !api_base.is_empty() { new_lines.push(format!("api_base = \"{}\"", api_base)); }
+                new_lines.push(format!("api_key = \"{}\"", api_key));
+                new_lines.push(format!("model = \"{}\"", model));
+                for (j, nl) in new_lines.into_iter().enumerate() {
+                    lines.insert(start + 1 + j, nl);
+                }
+            }
+        }
+
+        match std::fs::write(&config_path, lines.join("\n") + "\n") {
+            Ok(_) => tracing::info!("attention: embedding配置已保存到 {:?}", config_path),
+            Err(e) => return Json(serde_json::json!({ "status": "error", "error": format!("写入config.toml失败: {e}") })),
+        }
+    }
+
+    Json(serde_json::json!({ "status": "ok" }))
 }
 
 // ─── 辅助函数 ────────────────────────────────

@@ -1476,6 +1476,33 @@ function renderAttentionPage(el, data){
   }
   html+='</div></div>';
   
+  // ── 权重编辑卡片 ──
+  var weights=data.weights||{macro:1.0,focus:2.0,micro:3.0,synthesis:1.5};
+  var weightKeys=['macro','focus','micro','synthesis'];
+  var weightLabels={'macro':'Macro 宏观','focus':'Focus 焦点','micro':'Micro 微观','synthesis':'Synthesis 综合'};
+  var weightColors={'macro':'#4CAF50','focus':'#2196F3','micro':'#FF9800','synthesis':'#9C27B0'};
+  html+='<div class="card"><div class="card-hd"><h3>⚖️ 注意力层级倍率</h3></div><div style="display:flex;flex-direction:column;gap:6px">';
+  for(var wi=0;wi<weightKeys.length;wi++){
+    var wk=weightKeys[wi];
+    html+='<div class="dim-row"><div class="dim-label" style="width:90px;text-align:left;font-size:0.78rem;color:var(--fg2);border-left:3px solid '+(weightColors[wk]||'var(--accent)')+';padding-left:6px">'+esc(weightLabels[wk])+'</div>'+
+      '<input type="range" class="dim-slider" min="0" max="5" step="0.1" value="'+(weights[wk]||1.0)+'" data-attn-weight="'+wk+'" oninput="updateAttnWeightSlider(this)">'+
+      '<input type="number" class="dim-input" min="0" max="5" step="0.1" value="'+(weights[wk]||1.0).toFixed(1)+'" onchange="updateAttnWeightNumber(this,\''+wk+'\')" style="width:48px"></div>';
+  }
+  html+='<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">倍率影响各层级在合成时的加权重要性。</div></div></div>';
+  
+  // ── Embedding 配置卡片 ──
+  var emb=data.embedding||{};
+  html+='<div class="card"><div class="card-hd"><h3>🔌 Embedding 引擎配置</h3></div>'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">API 基地址</label>'+
+    '<input id="attnEmbApi" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;outline:none;font-family:var(--mono)" value="'+esc(emb.api_base||'https://api.siliconflow.cn/v1')+'" placeholder="https://api.siliconflow.cn/v1"></div>'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">API Key</label>'+
+    '<input id="attnEmbKey" type="password" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;outline:none;font-family:var(--mono)" value="'+(emb.api_key_mask||'')+'" placeholder="sk-..."></div>'+
+    '<div style="margin-bottom:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">模型名称</label>'+
+    '<input id="attnEmbModel" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;outline:none;font-family:var(--mono)" value="'+esc(emb.model||'BAAI/bge-m3')+'" placeholder="BAAI/bge-m3"></div>'+
+    '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px">'+
+    '<button class="btn sm" onclick="saveAttnConfig()">💾 保存</button>'+
+    '<span id="attnSaveFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div></div>';
+  
   // 底部操作栏+版本号
   html+='<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px">'+
     '<button class="btn sm" onclick="refreshAttentionPage()">↻ 刷新</button>'+
@@ -1516,6 +1543,72 @@ window.updateWeightNumber=function(el,key){
   var val=Math.min(5,Math.max(0,parseFloat(el.value)||0));
   el.value=val.toFixed(1);
   el.previousElementSibling.value=val;
+};
+
+// ─── Attention 权重滑块 ────
+var attnWeightDebounce=null;
+window.updateAttnWeightSlider=function(el){
+  var key=el.dataset.attnWeight;
+  var val=parseFloat(el.value);
+  el.nextElementSibling.value=val.toFixed(1);
+  clearTimeout(attnWeightDebounce);
+  attnWeightDebounce=setTimeout(function(){
+    saveAttnWeights();
+  },500);
+};
+window.updateAttnWeightNumber=function(el,key){
+  var val=Math.min(5,Math.max(0,parseFloat(el.value)||0));
+  el.value=val.toFixed(1);
+  el.previousElementSibling.value=val;
+  saveAttnWeights();
+};
+
+// ─── 保存注意力配置 ────
+window.saveAttnWeights=function(){
+  var fb=document.getElementById('attnSaveFeedback');
+  if(fb){fb.textContent='保存中...';fb.style.color='var(--fg2)';}
+  var weights={};
+  var sliders=document.querySelectorAll('[data-attn-weight]');
+  sliders.forEach(function(el){weights[el.dataset.attnWeight]=parseFloat(el.value);});
+  apiPost('/dashboard/attention/update',{weights:weights}).then(function(r){
+    if(r.status==='ok'){
+      if(fb){fb.textContent='✓ 权重已保存';fb.style.color='var(--green)';}
+      setTimeout(function(){if(fb)fb.textContent='';},2000);
+    }else{
+      if(fb){fb.textContent='✗ 保存失败';fb.style.color='var(--red)';}
+    }
+  }).catch(function(e){
+    if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
+  });
+};
+
+window.saveAttnConfig=function(){
+  var fb=document.getElementById('attnSaveFeedback');
+  if(fb){fb.textContent='保存中...';fb.style.color='var(--fg2)';}
+  
+  var weights={};
+  var sliders=document.querySelectorAll('[data-attn-weight]');
+  sliders.forEach(function(el){weights[el.dataset.attnWeight]=parseFloat(el.value);});
+  
+  var apiBase=document.getElementById('attnEmbApi').value.trim();
+  var apiKey=document.getElementById('attnEmbKey').value.trim();
+  var model=document.getElementById('attnEmbModel').value.trim();
+  
+  var body={weights:weights};
+  if(apiBase||apiKey){
+    body.embedding={api_base:apiBase,api_key:apiKey,model:model||'BAAI/bge-m3'};
+  }
+  
+  apiPost('/dashboard/attention/update',body).then(function(r){
+    if(r.status==='ok'){
+      if(fb){fb.textContent='✓ 已保存（需重启生效）';fb.style.color='var(--green)';}
+      setTimeout(function(){if(fb)fb.textContent='';},3000);
+    }else{
+      if(fb){fb.textContent='✗ 保存失败: '+(r.error||'');fb.style.color='var(--red)';}
+    }
+  }).catch(function(e){
+    if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
+  });
 };
 
 function switchMemTab(tab){
