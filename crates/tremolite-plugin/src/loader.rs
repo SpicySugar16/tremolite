@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::process::{Child, Command, Stdio};
 use std::io::{BufRead, BufReader, Write};
 use serde::{Deserialize, Serialize};
@@ -66,7 +65,7 @@ impl ProcessPlugin {
         }
     }
 
-    fn recv(&mut self) -> Result<Option<PluginMessage>, String> {
+    fn _recv(&mut self) -> Result<Option<PluginMessage>, String> {
         if let Some(ref mut child) = self.child {
             let stdout = child.stdout.as_mut()
                 .ok_or_else(|| "plugin stdout not available".to_string())?;

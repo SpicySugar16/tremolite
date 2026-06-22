@@ -6,7 +6,6 @@ use tremolite_core::module::{
     ToolDefinition,
 };
 use tremolite_llm::ToolFunction;
-use tremolite_memory::MemoryEntry;
 
 // ─── 压缩比例 ──────────────────────────────────────
 
@@ -145,6 +144,7 @@ pub struct CompressModule {
     compressed_context: String,
     handle: Option<EngineHandle>,
     auto_compress: bool,
+    #[allow(dead_code)]
     last_compress_count: usize,
     strategy_desc: String,
     /// 上下文压缩阈值（token 数）。0 = 自动，从模型查询

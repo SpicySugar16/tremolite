@@ -35,6 +35,7 @@ struct AppState {
     // 当前配置包名称
     profile_name: String,
     // 通道注册表（共享引用，用于查询已知目标）
+    #[allow(dead_code)]
     channel_registry: Option<Arc<tokio::sync::Mutex<ChannelRegistry>>>,
 }
 
@@ -106,7 +107,7 @@ async fn run_server_inner(
         channel_registry,
     });
 
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/health", get(handle_health))
         .route("/metrics", get(handle_metrics))
         .route("/chat", post(handle_chat))
@@ -137,6 +138,14 @@ async fn run_server_inner(
         .route("/dashboard/channels/manage", get(handle_channels_manage))
         .route("/dashboard/channels/save", post(handle_channels_save))
         .route("/dashboard/channels/sync-config", post(handle_channels_sync_config))
+        .route("/dashboard/engine/memory/search", get(handle_memory_search))
+        .route("/dashboard/engine/memory/delete", post(handle_memory_delete))
+        .route("/dashboard/engine/memory/update", post(handle_memory_update))
+        .route("/dashboard/engine/memory/paths", get(handle_memory_paths))
+        .route("/dashboard/config/profile", get(handle_profile_get).post(handle_profile_set))
+        .route("/dashboard/config/check", get(handle_config_check))
+        .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
+        .route("/avatars/{*filename}", get(handle_avatar_serve))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -152,6 +161,7 @@ async fn run_server_inner(
     println!("  POST /dashboard/profiles/load  —  switch agent profile");
     println!("  POST /chat          —  send message to agent");
     println!("  WS   /ws            —  WebSocket chat");
+    println!("  GET  /avatars/*     —  avatar static files");
     println!("  Press Ctrl+C to gracefully shut down.");
 
     // 优雅关停
@@ -515,7 +525,7 @@ async fn handle_dashboard_status(
 
     // 读记忆统计（尝试读 l2_profile）
     let home = std::env::var("HOME").unwrap_or_default();
-    let memory_dir = std::path::Path::new(&home).join(".tremolite").join("data").join("memory");
+    let (memory_dir, _) = memory_dir_path(&home);
     let l2_path = memory_dir.join("l2_profile.json");
     let memory_total = std::fs::read_to_string(&l2_path).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -678,9 +688,9 @@ async fn handle_engine_mod(
         .unwrap_or("trust");
 
     // 读记忆统计
-    let memory_dir = tremolite_dir.join("data").join("memory");
+    let (memory_dir, _) = memory_dir_path(&home);
     let l2_path = memory_dir.join("l2_profile.json");
-    let mem_total = std::fs::read_to_string(&l2_path).ok()
+    let _mem_total = std::fs::read_to_string(&l2_path).ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .map(|v| v.as_object().map(|o| o.len()).unwrap_or(0))
         .unwrap_or(0);
@@ -775,27 +785,145 @@ async fn handle_engine_mod(
             })
         }
         "memory" => {
-            let l1_count = std::fs::read_to_string(memory_dir.join("l1_working.json")).ok()
+            let trunc = |s: &str| -> String { s.chars().take(100).collect() };
+
+            // L1: l1_working.json (可以是对象 session_id->array 或数组)
+            let l1_entries: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("l1_working.json")).ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
-                .unwrap_or(0);
-            let l3_count = std::fs::read_to_string(memory_dir.join("l3_index.json")).ok()
+                .map(|v| {
+                    if let Some(arr) = v.as_array() {
+                        arr.clone()
+                    } else if let Some(obj) = v.as_object() {
+                        obj.values()
+                            .filter_map(|val| val.as_array().map(|a| a.clone()))
+                            .flatten()
+                            .collect()
+                    } else {
+                        vec![]
+                    }
+                })
+                .unwrap_or_default();
+            let l1: Vec<serde_json::Value> = l1_entries.iter().map(|e| {
+                serde_json::json!({
+                    "content": trunc(e.get("content").and_then(|v| v.as_str()).unwrap_or("")),
+                    "tags": e.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+                    "importance": e.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    "source": e.get("source").and_then(|v| v.as_str()).unwrap_or(""),
+                    "created_at": e.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                })
+            }).collect::<Vec<_>>();
+            // 按时间降序排列（最新的在最前）
+            let mut l1 = l1;
+            l1.sort_by(|a, b| {
+                let ca = a.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let cb = b.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            // L2: l2_profile.json (HashMap<string, entry>)
+            let l2: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("l2_profile.json")).ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
-                .unwrap_or(0);
-            let ram_count = std::fs::read_to_string(memory_dir.join("ram_fts.json")).ok()
+                .map(|v| {
+                    v.as_object().map(|obj| {
+                        obj.iter().map(|(key, val)| {
+                            serde_json::json!({
+                                "key": key,
+                                "content": trunc(val.get("content").and_then(|v| v.as_str()).unwrap_or("")),
+                                "tags": val.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+                                "importance": val.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            })
+                        }).collect::<Vec<_>>()
+                    }).unwrap_or_default()
+                })
+                .unwrap_or_default();
+
+            // L3: l3_index.json (HashMap<u64, entry>)
+            let l3: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("l3_index.json")).ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .map(|v| if v.is_array() { v.as_array().map(|a| a.len()).unwrap_or(0) } else { v.as_object().map(|o| o.len()).unwrap_or(0) })
-                .unwrap_or(0);
+                .map(|v| {
+                    v.as_object().map(|obj| {
+                        obj.iter().map(|(key, val)| {
+                            serde_json::json!({
+                                "id": key.parse::<u64>().unwrap_or(0),
+                                "summary": trunc(val.get("summary").and_then(|v| v.as_str()).unwrap_or("")),
+                                "has_embedding": val.get("embedding").is_some(),
+                                "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            })
+                        }).collect::<Vec<_>>()
+                    }).unwrap_or_default()
+                })
+                .unwrap_or_default();
+
+            // RAM: ram_fts.json (HashMap<u64, entry>)
+            let ram: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("ram_fts.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| {
+                    v.as_object().map(|obj| {
+                        obj.iter().map(|(key, val)| {
+                            serde_json::json!({
+                                "id": key.parse::<u64>().unwrap_or(0),
+                                "content_preview": trunc(val.get("content_preview").and_then(|v| v.as_str()).unwrap_or("")),
+                                "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            })
+                        }).collect::<Vec<_>>()
+                    }).unwrap_or_default()
+                })
+                .unwrap_or_default();
+
+            // Disk: disk_index/index.json
+            let disk: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("disk_index").join("index.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map(|v| {
+                    v.as_object().map(|obj| {
+                        obj.iter().map(|(key, val)| {
+                            serde_json::json!({
+                                "id": key.parse::<u64>().unwrap_or(0),
+                                "keyword": trunc(val.get("keyword").and_then(|v| v.as_str()).unwrap_or("")),
+                                "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            })
+                        }).collect::<Vec<_>>()
+                    }).unwrap_or_default()
+                })
+                .unwrap_or_default();
+
+            let l1_count = l1.len();
+            let l2_count = l2.len();
+            let l3_count = l3.len();
+            let ram_count = ram.len();
+            let disk_count = disk.len();
+            let total = l1_count + l2_count + l3_count + ram_count + disk_count;
+
             serde_json::json!({
-                "记忆总量": mem_total,
-                "L1 工作记忆": l1_count,
-                "L2 持久画像": mem_total,
-                "L3 索引层": l3_count,
-                "RAM 缓存": ram_count,
-                "存储路径": memory_dir.to_string_lossy(),
-                "版本": env!("CARGO_PKG_VERSION"),
-            })
+                    "summary": {
+                        "total_entries": total,
+                        "l1": l1_count,
+                        "l2": l2_count,
+                        "l3": l3_count,
+                        "ram": ram_count,
+                        "disk": disk_count,
+                        "storage_path": memory_dir.to_string_lossy().to_string(),
+                    },
+                    "layers": {
+                        "l1": l1,
+                        "l2": l2,
+                        "l3": l3,
+                        "ram": ram,
+                        "disk": disk,
+                    },
+                    "metabolism": {
+                        "demote_threshold": 0.3,
+                        "promote_threshold": 0.7,
+                        "weights": {
+                            "l1": 1.0,
+                            "l2": 2.0,
+                            "l3": 3.0,
+                            "ram": 1.5,
+                            "disk": 0.5,
+                        },
+                    },
+                    "version": "0.4.0",
+                })
         }
         "attention" => serde_json::json!({
             "上下文窗口": "启用中",
@@ -1190,7 +1318,7 @@ async fn handle_emotion_fluctuate(
     if let Some(plutchik) = data.get_mut("plutchik").and_then(|v| v.as_object_mut()) {
         for d in &dims {
             let old = plutchik.get(*d).and_then(|v| v.as_f64()).unwrap_or(50.0);
-            let delta = (rand::random::<f64>() * 30.0 - 15.0); // -15 ~ +15
+            let delta = rand::random::<f64>() * 30.0 - 15.0 ; // -15 ~ +15
             let new = (old + delta).clamp(0.0, 100.0);
             plutchik.insert(d.to_string(), serde_json::json!(new));
         }
@@ -1394,7 +1522,7 @@ async fn handle_channels_sync_config(
     }
 
     let existing_config = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let mut lines: Vec<&str> = existing_config.lines().collect();
+    let lines: Vec<&str> = existing_config.lines().collect();
     // 移除旧的 [channels.*] 段
     let mut keep = Vec::new();
     let mut in_channels = false;
@@ -1497,6 +1625,7 @@ fn normalize_deliver(d: &str) -> &str {
     }
 }
 
+#[allow(dead_code)]
 fn extract_deliver_target(d: &str) -> Option<String> {
     let pos = d.find(':')?;
     let rest = &d[pos + 1..];
@@ -1694,7 +1823,7 @@ fn walk_dir(base: &std::path::Path, dir: &std::path::Path) -> std::io::Result<Ve
 // ─── Handler: 加载配置包 ───────────────────────
 
 async fn handle_profile_load(
-    axum::extract::Extension(state): axum::extract::Extension<Arc<AppState>>,
+    axum::extract::Extension(_state): axum::extract::Extension<Arc<AppState>>,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -1737,7 +1866,7 @@ async fn handle_profile_load(
     }
 }
 
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+fn _copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     if dst.exists() {
         std::fs::remove_dir_all(dst)?;
     }
@@ -1748,12 +1877,211 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if ty.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
+            _copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             std::fs::copy(&src_path, &dst_path)?;
         }
     }
     Ok(())
+}
+
+// ─── Handler: 用户配置 ────────────────────────────
+
+async fn handle_profile_get() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_file = std::path::Path::new(&home)
+        .join(".tremolite/profiles/aoi/profile.json");
+    let data = if profile_file.exists() {
+        std::fs::read_to_string(&profile_file).ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .unwrap_or(serde_json::json!({
+                "username": "琳玲",
+                "ai_name": "葵",
+                "user_avatar": "",
+                "ai_avatar": "",
+            }))
+    } else {
+        serde_json::json!({
+            "username": "琳玲",
+            "ai_name": "葵",
+            "user_avatar": "",
+            "ai_avatar": "",
+        })
+    };
+    Json(serde_json::json!({"status": "ok", "data": data, "path": profile_file.to_string_lossy().to_string()}))
+}
+
+async fn handle_profile_set(
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_dir = std::path::Path::new(&home).join(".tremolite/profiles/aoi");
+    std::fs::create_dir_all(&profile_dir).unwrap_or(());
+    let profile_file = profile_dir.join("profile.json");
+
+    let data = serde_json::json!({
+        "username": body.get("username").and_then(|v| v.as_str()).unwrap_or("琳玲"),
+        "ai_name": body.get("ai_name").and_then(|v| v.as_str()).unwrap_or("葵"),
+        "user_avatar": body.get("user_avatar").and_then(|v| v.as_str()).unwrap_or(""),
+        "ai_avatar": body.get("ai_avatar").and_then(|v| v.as_str()).unwrap_or(""),
+    });
+    let _ = std::fs::write(&profile_file, serde_json::to_string_pretty(&data).unwrap_or_default());
+    Json(serde_json::json!({"status": "ok", "path": profile_file.to_string_lossy().to_string()}))
+}
+
+async fn handle_avatar_upload(
+    mut multipart: axum::extract::Multipart,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let avatars_dir = std::path::Path::new(&home).join(".tremolite/profiles/aoi/avatars");
+    let _ = std::fs::create_dir_all(&avatars_dir);
+
+    let mut avatar_type = String::new();
+    let mut file_data: Vec<u8> = Vec::new();
+    let mut original_name = String::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "type" {
+            avatar_type = field.text().await.unwrap_or_default();
+        } else if name == "file" {
+            original_name = field.file_name().unwrap_or("image.png").to_string();
+            file_data = field.bytes().await.unwrap_or_default().to_vec();
+        }
+    }
+
+    if file_data.is_empty() || avatar_type.is_empty() {
+        return Json(serde_json::json!({"status": "error", "error": "缺少文件或类型"}));
+    }
+
+    let ext = if original_name.contains('.') {
+        original_name.rsplit('.').next().unwrap_or("png").to_string()
+    } else {
+        "png".to_string()
+    };
+
+    let filename = format!("{}.{}", avatar_type, ext);
+    let filepath = avatars_dir.join(&filename);
+    if let Err(e) = std::fs::write(&filepath, &file_data) {
+        return Json(serde_json::json!({"status": "error", "error": format!("写入失败: {}", e)}));
+    }
+
+    let avatar_url = format!("/avatars/{}", filename);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "avatar_url": avatar_url,
+        "filepath": filepath.to_string_lossy().to_string(),
+    }))
+}
+
+async fn handle_avatar_serve(
+    Path(filename): Path<String>,
+) -> Result<(axum::http::StatusCode, [(axum::http::HeaderName, String); 2], Vec<u8>), (axum::http::StatusCode, &'static str)> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let filepath = std::path::Path::new(&home)
+        .join(".tremolite/profiles/aoi/avatars")
+        .join(&filename);
+
+    if filename.contains("..") || filename.contains('/') {
+        return Err((axum::http::StatusCode::FORBIDDEN, "forbidden"));
+    }
+
+    match std::fs::read(&filepath) {
+        Ok(data) => {
+            let content_type = if filename.ends_with(".png") {
+                "image/png"
+            } else if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if filename.ends_with(".gif") {
+                "image/gif"
+            } else if filename.ends_with(".webp") {
+                "image/webp"
+            } else if filename.ends_with(".svg") {
+                "image/svg+xml"
+            } else {
+                "application/octet-stream"
+            };
+            Ok((
+                axum::http::StatusCode::OK,
+                [
+                    (axum::http::HeaderName::from_static("content-type"), content_type.to_string()),
+                    (axum::http::HeaderName::from_static("cache-control"), "no-cache, no-store, must-revalidate".to_string()),
+                ],
+                data,
+            ))
+        }
+        Err(_) => Err((axum::http::StatusCode::NOT_FOUND, "not found")),
+    }
+}
+
+async fn handle_config_check() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_dir = std::path::Path::new(&home).join(".tremolite/profiles/aoi");
+    let data_dir = std::path::Path::new(&home).join(".tremolite/data");
+
+    let check_files = vec![
+        "emotion.json",
+        "emotion_history.json",
+        "tone_map.json",
+        "cron_tasks.json",
+        "SOUL.md",
+    ];
+    let check_dirs = vec![
+        "data/memory/l1_working.json",
+        "data/memory/l2_profile.json",
+        "data/memory/l3_index.json",
+    ];
+
+    let mut in_profile = Vec::new();
+    let mut in_data = Vec::new();
+    let mut missing = Vec::new();
+
+    for f in &check_files {
+        let pf = profile_dir.join(f);
+        let df = data_dir.join(f);
+        if pf.exists() { in_profile.push(f.to_string()); }
+        else if df.exists() { in_data.push(f.to_string()); }
+        else { missing.push(f.to_string()); }
+    }
+    for f in &check_dirs {
+        let pf = profile_dir.join(f);
+        let df = data_dir.join(f);
+        if pf.exists() { in_profile.push(f.to_string()); }
+        else if df.exists() { in_data.push(f.to_string()); }
+        else { missing.push(f.to_string()); }
+    }
+
+    let mut data_leftovers = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&data_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                data_leftovers.push(p.to_string_lossy().to_string());
+            }
+        }
+    }
+    for sub in &["memory", "learn"] {
+        let subdir = data_dir.join(sub);
+        if let Ok(entries) = std::fs::read_dir(&subdir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    data_leftovers.push(p.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "profile_path": profile_dir.to_string_lossy().to_string(),
+        "data_path": data_dir.to_string_lossy().to_string(),
+        "in_profile": in_profile,
+        "in_data": in_data,
+        "missing": missing,
+        "data_leftovers": data_leftovers,
+    }))
 }
 
 // ─── Handler: 配置数据 ────────────────────────────
@@ -1791,6 +2119,17 @@ async fn handle_dashboard_config() -> Json<serde_json::Value> {
     if !current_section.is_empty() {
         sections.push(serde_json::json!({"section": current_section, "lines": current_lines}));
     }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_path = std::path::Path::new(&home).join(".tremolite/profiles/aoi/profile.json");
+    let profile_exists = profile_path.exists();
+    sections.push(serde_json::json!({
+        "section": "用户配置 (配置包)",
+        "lines": [
+            format!("文件路径: {}", profile_path.to_string_lossy()),
+            format!("状态: {}", if profile_exists { "已创建 ✓" } else { "未创建" }),
+            "提示: 使用下方「用户设定」卡片编辑用户名/AI名/头像".to_string(),
+        ]
+    }));
     Json(serde_json::json!({"status": "ok", "sections": sections}))
 }
 
@@ -1863,7 +2202,7 @@ async fn handle_dashboard_sessions(
 // ─── Handler：Webhook 接收端 ────────────────────
 
 async fn handle_webhook(
-    Extension(state): Extension<Arc<AppState>>,
+    Extension(_state): Extension<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
     headers: axum::http::HeaderMap,
     axum::Json(payload): axum::Json<serde_json::Value>,
@@ -1900,6 +2239,252 @@ async fn handle_webhook(
         "message": msg,
         "hook_name": event.name,
         "source": event.source,
+    }))
+}
+
+// ─── Handler: 记忆搜索 ─────────────────────
+async fn handle_memory_search(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let q = params.get("q").map(|s| s.trim()).unwrap_or("").to_lowercase();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let (base_dir, _) = memory_dir_path(&home);
+    
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    
+    let l2 = read_json_file(&base_dir.join("l2_profile.json"));
+    if let Some(obj) = l2.as_object() {
+        for (key, val) in obj {
+            let content = val.get("content").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let tags_str = val.get("tags").and_then(|v| v.as_array()).map(|a| {
+                a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(" ")
+            }).unwrap_or_default().to_lowercase();
+            if q.is_empty() || content.contains(&q) || tags_str.contains(&q) {
+                results.push(serde_json::json!({
+                    "layer": "l2", "key": key,
+                    "id": val.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "content": val.get("content"),
+                    "tags": val.get("tags"),
+                    "importance": val.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                }));
+            }
+        }
+    }
+    
+    let l3 = read_json_file(&base_dir.join("l3_index.json"));
+    if let Some(obj) = l3.as_object() {
+        for (key, val) in obj {
+            let summary = val.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            if q.is_empty() || summary.contains(&q) {
+                let id_num: u64 = key.parse().unwrap_or(0);
+                let mut ram_content = String::new();
+                let ram_file = base_dir.join("ram").join(format!("{}.txt", id_num));
+                if let Ok(content) = std::fs::read_to_string(&ram_file) {
+                    ram_content = content;
+                }
+                results.push(serde_json::json!({
+                    "layer": "l3", "id": id_num, "id_str": key,
+                    "summary": val.get("summary").and_then(|v| v.as_str()).unwrap_or(""),
+                    "has_embedding": val.get("embedding").is_some(),
+                    "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    "ram_content": ram_content,
+                }));
+            }
+        }
+    }
+    
+    let disk_idx = read_json_file(&base_dir.join("disk_index/index.json"));
+    if let Some(obj) = disk_idx.as_object() {
+        for (key, val) in obj {
+            let keyword = val.get("keyword").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            if q.is_empty() || keyword.contains(&q) {
+                let id_num: u64 = key.parse().unwrap_or(0);
+                let mut store_content = String::new();
+                let store_file = base_dir.join("disk_store").join(format!("{}.txt", id_num));
+                if let Ok(content) = std::fs::read_to_string(&store_file) {
+                    store_content = content;
+                }
+                results.push(serde_json::json!({
+                    "layer": "disk", "id": id_num, "id_str": key,
+                    "keyword": val.get("keyword").and_then(|v| v.as_str()).unwrap_or(""),
+                    "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    "store_content": store_content,
+                }));
+            }
+        }
+    }
+    
+    results.sort_by(|a, b| {
+        let ca = a.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let cb = b.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    
+    Json(serde_json::json!({
+        "status": "ok", "query": q, "total": results.len(),
+        "results": results,
+        "memory_path": base_dir.to_string_lossy().to_string(),
+        "in_profile": base_dir.to_string_lossy().contains("/profiles/"),
+    }))
+}
+
+async fn handle_memory_delete(
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let layer = body.get("layer").and_then(|v| v.as_str()).unwrap_or("");
+    let id_str = body.get("id_str").and_then(|v| v.as_str()).unwrap_or("");
+    let id_num = body.get("id_num").and_then(|v| v.as_u64()).unwrap_or(0);
+    let home = std::env::var("HOME").unwrap_or_default();
+    let (base_dir, _) = memory_dir_path(&home);
+    
+    let mut removed = Vec::new();
+    
+    match layer {
+        "l2" => {
+            let mut l2 = read_json_file(&base_dir.join("l2_profile.json"));
+            if let Some(obj) = l2.as_object_mut() {
+                if obj.remove(id_str).is_some() {
+                    removed.push(format!("l2:{}", id_str));
+                    let _ = write_json_file(&base_dir.join("l2_profile.json"), &l2);
+                    for fname in &["l2_embeddings.json", "l2_rough.json"] {
+                        let mut f = read_json_file(&base_dir.join(fname));
+                        if let Some(o) = f.as_object_mut() { o.remove(id_str); }
+                        let _ = write_json_file(&base_dir.join(fname), &f);
+                    }
+                }
+            }
+        }
+        "l3" => {
+            let mut l3 = read_json_file(&base_dir.join("l3_index.json"));
+            if let Some(obj) = l3.as_object_mut() {
+                if obj.remove(id_str).is_some() {
+                    removed.push(format!("l3:{}", id_str));
+                    let _ = write_json_file(&base_dir.join("l3_index.json"), &l3);
+                    let mut ram = read_json_file(&base_dir.join("ram_fts.json"));
+                    if let Some(o) = ram.as_object_mut() { o.remove(id_str); }
+                    let _ = write_json_file(&base_dir.join("ram_fts.json"), &ram);
+                    let ram_file = base_dir.join("ram").join(format!("{}.txt", id_num));
+                    if ram_file.exists() { let _ = std::fs::remove_file(&ram_file); }
+                    removed.push(format!("ram:{}", id_num));
+                    let vec_file = base_dir.join("ram").join(format!("{}.vec.json", id_num));
+                    if vec_file.exists() { let _ = std::fs::remove_file(&vec_file); }
+                }
+            }
+        }
+        "disk" => {
+            let idx_path = base_dir.join("disk_index/index.json");
+            let mut disk_idx = read_json_file(&idx_path);
+            if let Some(obj) = disk_idx.as_object_mut() {
+                if obj.remove(id_str).is_some() {
+                    removed.push(format!("disk_index:{}", id_str));
+                    let _ = write_json_file(&idx_path, &disk_idx);
+                    let store_file = base_dir.join("disk_store").join(format!("{}.txt", id_num));
+                    if store_file.exists() { let _ = std::fs::remove_file(&store_file); }
+                    removed.push(format!("disk_store:{}", id_num));
+                    let emb_path = base_dir.join("disk_index/embeddings.json");
+                    let mut emb = read_json_file(&emb_path);
+                    if let Some(o) = emb.as_object_mut() { o.remove(id_str); }
+                    let _ = write_json_file(&emb_path, &emb);
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    Json(serde_json::json!({"status": "ok", "removed": removed}))
+}
+
+async fn handle_memory_update(
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let layer = body.get("layer").and_then(|v| v.as_str()).unwrap_or("");
+    let id_str = body.get("id_str").and_then(|v| v.as_str()).unwrap_or("");
+    let new_content = body.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    let id_num = body.get("id_num").and_then(|v| v.as_u64()).unwrap_or(0);
+    let home = std::env::var("HOME").unwrap_or_default();
+    let (base_dir, _) = memory_dir_path(&home);
+    
+    match layer {
+        "l2" => {
+            let mut l2 = read_json_file(&base_dir.join("l2_profile.json"));
+            if let Some(obj) = l2.as_object_mut() {
+                if let Some(entry) = obj.get_mut(id_str) {
+                    if let Some(m) = entry.as_object_mut() {
+                        m.insert("content".into(), serde_json::Value::String(new_content.into()));
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                        m.insert("last_updated".into(), serde_json::json!(now));
+                    }
+                }
+            }
+            let _ = write_json_file(&base_dir.join("l2_profile.json"), &l2);
+        }
+        "l3" => {
+            let mut l3 = read_json_file(&base_dir.join("l3_index.json"));
+            if let Some(obj) = l3.as_object_mut() {
+                if let Some(entry) = obj.get_mut(id_str) {
+                    if let Some(m) = entry.as_object_mut() {
+                        m.insert("summary".into(), serde_json::Value::String(new_content.into()));
+                    }
+                }
+            }
+            let _ = write_json_file(&base_dir.join("l3_index.json"), &l3);
+            let mut ram = read_json_file(&base_dir.join("ram_fts.json"));
+            if let Some(obj) = ram.as_object_mut() {
+                if let Some(entry) = obj.get_mut(id_str) {
+                    if let Some(m) = entry.as_object_mut() {
+                        m.insert("content_preview".into(), serde_json::Value::String(new_content.chars().take(100).collect::<String>()));
+                    }
+                }
+            }
+            let _ = write_json_file(&base_dir.join("ram_fts.json"), &ram);
+            let ram_file = base_dir.join("ram").join(format!("{}.txt", id_num));
+            let _ = std::fs::write(&ram_file, &new_content);
+        }
+        "disk" => {
+            let idx_path = base_dir.join("disk_index/index.json");
+            let mut disk_idx = read_json_file(&idx_path);
+            if let Some(obj) = disk_idx.as_object_mut() {
+                if let Some(entry) = obj.get_mut(id_str) {
+                    if let Some(m) = entry.as_object_mut() {
+                        m.insert("keyword".into(), serde_json::Value::String(new_content.into()));
+                    }
+                }
+            }
+            let _ = write_json_file(&idx_path, &disk_idx);
+            let store_file = base_dir.join("disk_store").join(format!("{}.txt", id_num));
+            let _ = std::fs::write(&store_file, &new_content);
+        }
+        _ => {}
+    }
+    
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn handle_memory_paths() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let (base_dir, in_profile) = memory_dir_path(&home);
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&base_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path.to_string_lossy().to_string());
+            } else if path.is_dir() {
+                if let Ok(sub) = std::fs::read_dir(&path) {
+                    for se in sub.flatten() {
+                        files.push(se.path().to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    Json(serde_json::json!({
+        "status": "ok",
+        "current_base": base_dir.to_string_lossy().to_string(),
+        "in_profile": in_profile,
+        "expected_profile_path": std::path::Path::new(&home).join(".tremolite/profiles/aoi/data/memory").to_string_lossy().to_string(),
+        "files": files,
     }))
 }
 
@@ -1941,4 +2526,31 @@ fn get_memory_info() -> Value {
     } else {
         serde_json::json!("unavailable")
     }
+}
+
+/// 确定记忆文件目录（优先配置包，回退 data 目录）
+fn memory_dir_path(home: &str) -> (std::path::PathBuf, bool) {
+    let profile_path = std::path::Path::new(home).join(".tremolite/profiles/aoi/data/memory");
+    if profile_path.exists() {
+        (profile_path, true)
+    } else {
+        (std::path::Path::new(home).join(".tremolite/data/memory"), false)
+    }
+}
+
+/// 读取 JSON 文件为 Value
+fn read_json_file(path: &std::path::Path) -> serde_json::Value {
+    std::fs::read_to_string(path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::json!({}))
+}
+
+/// 写 Value 到 JSON 文件
+fn write_json_file(path: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    let s = serde_json::to_string_pretty(value).map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(path, &s).map_err(|e| format!("写入失败: {}", e))?;
+    Ok(())
 }

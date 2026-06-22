@@ -56,8 +56,10 @@ struct MessageEventData {
     #[serde(default)]
     pub group_open_id: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub guild_id: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub channel_id: Option<String>,
 }
 
@@ -106,6 +108,7 @@ const OP_HEARTBEAT: u64 = 1;
 const OP_IDENTIFY: u64 = 2;
 const OP_HELLO: u64 = 10;
 const OP_HEARTBEAT_ACK: u64 = 11;
+#[allow(dead_code)]
 const OP_RESUME: u64 = 6;
 const OP_RECONNECT: u64 = 7;
 
@@ -225,14 +228,14 @@ impl QqBotChannel {
     }
 
     /// 构建 QQBot 认证头值
-    async fn auth_bearer(&self) -> Result<String, String> {
+    async fn _auth_bearer(&self) -> Result<String, String> {
         let token = self.get_access_token().await?;
         Ok(format!("QQBot {token}"))
     }
 
     /// 获取 WebSocket 网关地址（通过 /gateway 发现）
-    async fn get_gateway_url(&self) -> Result<String, String> {
-        let bearer = self.auth_bearer().await?;
+    async fn _get_gateway_url(&self) -> Result<String, String> {
+        let bearer = self._auth_bearer().await?;
         let url = format!("{}/gateway", self.api_base());
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let resp = client
@@ -509,7 +512,7 @@ async fn run_qqbot_connection(
                                     "AT_MESSAGE_CREATE" | "C2C_MESSAGE_CREATE" | "GROUP_AT_MESSAGE_CREATE" => {
                                         if let Some(data) = parse_message_event(&frame.d) {
                                             let is_group = event_type != "C2C_MESSAGE_CREATE";
-                                            let channel_detail = if is_group {
+                                            let _channel_detail = if is_group {
                                                 let gid = data.group_open_id.as_deref().unwrap_or("unknown");
                                                 format!("qqbot.group.{}", gid)
                                             } else {
@@ -689,6 +692,7 @@ struct OneBotEvent {
     message_type: String,
     /// 子类型
     #[serde(default)]
+    #[allow(dead_code)]
     sub_type: String,
     /// 群号
     #[serde(default)]
@@ -709,6 +713,7 @@ struct SenderInfo {
     #[serde(default)]
     nickname: String,
     #[serde(default)]
+    #[allow(dead_code)]
     user_id: Option<i64>,
 }
 
@@ -1193,6 +1198,7 @@ pub struct ChannelsModule {
     /// 是否已桥接
     bridged: bool,
     /// 模块初始化时拿到的 engine handle
+    #[allow(dead_code)]
     engine_handle: Option<tremolite_core::module::EngineHandle>,
     /// 通道名列表（用于 display_status）
     channel_names: Vec<String>,
@@ -1498,7 +1504,7 @@ impl Module for ChannelsModule {
         }
     }
 
-    fn on_event(&mut self, event: &Event, ctx: &EventContext) -> Result<EventResponse, ModuleError> {
+    fn on_event(&mut self, event: &Event, _ctx: &EventContext) -> Result<EventResponse, ModuleError> {
         match event {
             Event::Startup => {
                 tracing::info!("channels: module ready ({} channels)", self.channel_names.len());

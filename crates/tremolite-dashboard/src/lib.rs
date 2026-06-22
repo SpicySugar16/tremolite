@@ -3,6 +3,7 @@ use tremolite_llm::ToolDefinition;
 
 /// 仪表盘模块 — 注册后让 gateway 挂载 Web 管理界面
 pub struct DashboardModule {
+    #[allow(dead_code)]
     enabled: bool,
 }
 

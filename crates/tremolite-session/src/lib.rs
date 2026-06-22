@@ -7,7 +7,7 @@
 ///   冷却（idle 超时）→ 冻结状态，数据保留，不再活跃
 ///   清理（closed 超时）→ 真正删除，通知 MemoryModule 回收 L1
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 会话状态——引擎通过 session_id 查找
 pub struct SessionState {

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 /// 透闪石 CLI 子命令定义
 #[derive(Debug)]
@@ -8,6 +7,7 @@ pub enum Subcommand {
     /// Daemon 模式（HTTP API 服务）
     Daemon {
         port: u16,
+        #[allow(dead_code)]
         dashboard_port: u16,
     },
     /// TUI 模式
@@ -15,6 +15,7 @@ pub enum Subcommand {
     /// Dashboard 模式
     Dashboard {
         port: u16,
+        #[allow(dead_code)]
         dashboard_port: u16,
     },
     /// 查看/管理计划书
@@ -61,6 +62,7 @@ pub struct ParsedCommand {
     pub config_path: Option<String>,
     pub log_level: String,
     pub session_id: String,
+    #[allow(dead_code)]
     pub gateway_url: String,
     pub profile_name: String,
 }

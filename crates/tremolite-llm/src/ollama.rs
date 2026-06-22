@@ -1,4 +1,4 @@
-use crate::{LLMProvider, Message, ToolDefinition, LlmResponse, LlmError, StreamChunk, StreamIterator};
+use crate::{LLMProvider, Message, ToolDefinition, LlmResponse, LlmError, StreamIterator};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ struct ChatResponse {
 
 #[derive(Deserialize)]
 struct ResponseMessage {
-    role: String,
+    _role: String,
     content: String,
 }
 

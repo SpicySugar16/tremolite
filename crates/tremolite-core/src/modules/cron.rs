@@ -20,6 +20,7 @@ use crate::scheduler::SessionTask;
 pub struct CronModule {
     jobs: Arc<Mutex<Vec<CronJobState>>>,
     running: Arc<AtomicBool>,
+    #[allow(dead_code)]
     handle: Option<EngineHandle>,
     scheduler_tx: Option<mpsc::Sender<SessionTask>>,
     /// cron_tasks.json 路径——ticker 每 tick 从这里重载任务

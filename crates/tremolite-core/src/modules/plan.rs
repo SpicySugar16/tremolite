@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tremolite_llm::{ToolDefinition, ToolFunction};
-use tremolite_plan::{PlanManager, PlanStatus, PlanStep, AutoAdvanceResult};
+use tremolite_plan::{PlanManager, PlanStatus, PlanStep};
 use crate::module::{Module, Capability, ModuleError, Event, EventResponse, EventContext};
 
 /// 看板模块——计划书与任务编排
@@ -13,7 +13,7 @@ pub struct KanbanModule {
 
 impl KanbanModule {
     pub fn new(data_dir: PathBuf) -> Self {
-        let mut mgr = PlanManager::new(data_dir.join("plan").join("plans.json"));
+        let mgr = PlanManager::new(data_dir.join("plan").join("plans.json"));
         Self { mgr }
     }
 

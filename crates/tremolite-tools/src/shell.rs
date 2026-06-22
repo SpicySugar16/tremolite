@@ -30,7 +30,7 @@ impl Tool for ShellTool {
             },
         };
 
-        let timeout_ms = args.get("timeout")
+        let _timeout_ms = args.get("timeout")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(10);
 

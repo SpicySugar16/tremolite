@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ─── 嵌入引擎模块 ─────────────────────────────────
@@ -465,7 +464,7 @@ impl L3IndexMemory {
         if let Some(emb) = &entry.embedding {
             self.embeddings.insert(entry.id, emb.clone());
         }
-        let now = now_secs();
+        let _now = now_secs();
         if self.keywords.len() >= self.max_entries {
             // 移除最久未访问的
             if let Some((oldest_id, _)) = self
@@ -670,7 +669,7 @@ impl RamFileStore {
         let stale: Vec<u64> = self
             .created_at
             .iter()
-            .filter(|(&id, &created)| {
+            .filter(|(&_id, &created)| {
                 let hours = (now - created) as f64 / 3600.0;
                 let score = 1.0 / (1.0 + hours * 0.05);
                 score < threshold
@@ -1119,14 +1118,14 @@ fn distill_entry_content(raw: &str) -> String {
 }
 
 /// 情绪关键词检测——返回 (发送者标签, 情绪标签)
-fn detect_mood(text: &str) -> (&'static str, Option<&'static str>) {
+fn detect_mood(text: &str, ai_name: &str, username: &str) -> (String, Option<&'static str>) {
     // 发送者标签检测
-    let tag = if text.contains("kamisama:") || text.contains("神大人:") {
-        "神大人"
-    } else if text.contains("葵:") {
-        "葵"
+    let tag = if text.contains(&format!("{}:", ai_name)) {
+        ai_name.to_string()
+    } else if text.contains(&format!("{}:", username)) {
+        username.to_string()
     } else {
-        "用户"
+        "用户".to_string()
     };
     // 情绪关键词
     let mood = if text.contains('!') || text.contains('！')
@@ -1338,6 +1337,10 @@ pub struct MemoryManager {
     l3_path: PathBuf,
     ram_path: PathBuf,
     next_id: u64,
+    /// AI 名称
+    pub ai_name: String,
+    /// 用户名称
+    pub username: String,
 }
 
 impl MemoryManager {
@@ -1363,6 +1366,8 @@ impl MemoryManager {
             l3_path,
             ram_path,
             next_id: 1,
+            ai_name: "葵".to_string(),
+            username: "琳玲".to_string(),
         };
 
         // 从磁盘恢复 L1, L3, RAM
@@ -1385,14 +1390,14 @@ impl MemoryManager {
     }
 
     /// 遍历所有 session 的 L1（只读）
-    fn for_each_l1<F>(&self, mut f: F) where F: FnMut(&str, &L1Buffer) {
+    fn _for_each_l1<F>(&self, mut f: F) where F: FnMut(&str, &L1Buffer) {
         for (sid, buf) in &self.l1_sessions {
             f(sid, buf);
         }
     }
 
     /// 遍历所有 session 的 L1（可变）
-    fn for_each_l1_mut<F>(&mut self, mut f: F) where F: FnMut(&str, &mut L1Buffer) {
+    fn _for_each_l1_mut<F>(&mut self, mut f: F) where F: FnMut(&str, &mut L1Buffer) {
         for (sid, buf) in &mut self.l1_sessions {
             f(sid, buf);
         }
@@ -1543,7 +1548,7 @@ impl MemoryManager {
 
         // 纯规则提炼
         let distilled = distill_entry_content(&raw);
-        let (tag, mood) = detect_mood(&raw);
+        let (tag, mood) = detect_mood(&raw, &self.ai_name, &self.username);
 
         let distilled_content = if let Some(m) = mood {
             format!("[{}] {} ⚡{}", tag, distilled, m)
@@ -1633,14 +1638,14 @@ impl MemoryManager {
         // RAM：退化路径——仅当 L3 未命中时做全文遍历
         let has_l3 = results.iter().any(|(l, _, _)| *l == MemoryLevel::L3);
         if !has_l3 {
-            for (id, snippet, score) in self.ram.search_contains(query) {
+            for (_id, snippet, score) in self.ram.search_contains(query) {
                 results.push((MemoryLevel::Ram, snippet, score));
             }
         }
 
         // Disk：归档搜索
         let disk_results = self.disk.search_all(query);
-        for &(id, ref snippet, ref archive_name) in &disk_results {
+        for &(_id, ref snippet, ref archive_name) in &disk_results {
             results.push((
                 MemoryLevel::Disk,
                 format!("[{}] {}", archive_name, snippet),
@@ -1754,7 +1759,7 @@ impl MemoryManager {
         // ── 第四步：session 过滤 ──
         if let Some(sid) = session_id {
             let tag_filter = format!("session:{}", sid);
-            deduped.retain(|(level, snippet, _)| {
+            deduped.retain(|(_level, snippet, _)| {
                 // L1 和 RAM 的 tag 需要从原始数据判断，这里用 snippet 做关键词
                 snippet.contains(&tag_filter)
                     || snippet.contains(&lower_query) // 如果没有 session 标签，至少保证内容匹配
@@ -1974,7 +1979,7 @@ impl MemoryManager {
             })
             .map(|(k, e)| (k.clone(), e.clone()))
             .collect();
-        for (_, entry) in l2_fresh {
+        for (_, _entry) in l2_fresh {
             /* L2→L1 晋升已禁用——已提炼条目不可解压回原文 */
         }
     }

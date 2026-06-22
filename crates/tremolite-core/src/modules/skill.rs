@@ -7,7 +7,7 @@ use std::fs;
 use tremolite_learn::LearningEngine;
 use tremolite_llm::{ToolDefinition, ToolFunction};
 use crate::module::{
-    Capability, Event, EventContext, EventResponse, Module, ModuleError, ModuleInfo,
+    Capability, Event, EventContext, EventResponse, Module, ModuleError,
 };
 
 /// 技能模块——从 LearningModule 升级的完整技能系统
@@ -177,7 +177,7 @@ description: {description}
         // 解析字段
         let mut name = String::new();
         let mut category = String::new();
-        let mut description = String::new();
+        let mut _description = String::new();
 
         for line in frontmatter.lines() {
             let line = line.trim();
@@ -186,7 +186,7 @@ description: {description}
             } else if let Some(val) = line.strip_prefix("category:") {
                 category = val.trim().to_string();
             } else if let Some(val) = line.strip_prefix("description:") {
-                description = val.trim().to_string();
+                _description = val.trim().to_string();
             }
         }
 
@@ -202,7 +202,7 @@ description: {description}
         }
 
         let id = format!("file.{}", name);
-        let now = std::time::SystemTime::now()
+        let _now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
@@ -226,7 +226,7 @@ description: {description}
         let mut parts = Vec::new();
 
         // 已精通的技能
-        let mastered: Vec<String> = (0..stats.total_skills)
+        let _mastered: Vec<String> = (0..stats.total_skills)
             .filter_map(|_| {
                 // 遍历获取已掌握技能
                 None
@@ -368,7 +368,7 @@ impl Module for SkillModule {
                     stats.expert_skills,
                 ));
                 lines.push("".into());
-                for (skill, reason) in &suggestions {
+                for (skill, _reason) in &suggestions {
                     let mastery = if skill.is_expert() {
                         "精通"
                     } else if skill.is_mastered() {
@@ -526,22 +526,7 @@ impl Module for SkillModule {
                 );
                 Ok(EventResponse::Pass)
             }
-            Event::OnResponse { .. } => {
-                let suggestions = self.engine.suggest_practice(2);
-                for (skill, reason) in &suggestions {
-                    tracing::debug!(
-                        "技能建议：技能「{}」{}（熟练度 {:.2}）",
-                        skill.name,
-                        reason,
-                        skill.proficiency
-                    );
-                }
-                let domain_ids: Vec<String> = self.engine.list_mature_domains(0.5);
-                if domain_ids.len() >= 2 {
-                    self.engine.auto_compose(&domain_ids[0], &domain_ids[1]);
-                }
-                Ok(EventResponse::Pass)
-            }
+
             Event::Shutdown => {
                 let _ = self.engine.flush();
                 Ok(EventResponse::Pass)

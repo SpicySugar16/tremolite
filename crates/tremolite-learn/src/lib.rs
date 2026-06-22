@@ -328,7 +328,7 @@ impl LearningEngine {
 
     /// 创建一个新技能（由蒸馏或外部工具调用）
     pub fn create_skill(&mut self, id: &str, name: &str, category: &str,
-                        description: &str, body: &str) -> Result<(), String> {
+                        description: &str, _body: &str) -> Result<(), String> {
         if self.atomic_skills.contains_key(id) {
             return Err(format!("skill '{}' already exists", id));
         }
@@ -530,7 +530,7 @@ impl LearningEngine {
             None => return Vec::new(),
         };
 
-        let now = std::time::SystemTime::now()
+        let _now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();

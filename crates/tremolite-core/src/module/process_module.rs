@@ -5,8 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 use crate::module::{
-    Module, Capability, ModuleError, Event, EventResponse, EventContext,
-    ModuleInfo, ToolDefinition, CapabilityDeclaration, EngineEventMessage,
+    Module, Capability, ModuleError, Event, EventResponse, EventContext, ToolDefinition, CapabilityDeclaration, EngineEventMessage,
     ModuleEventResponse, ToolCallMessage, ToolResultMessage, ModulePushMessage,
 };
 use tremolite_llm::ToolFunction;
@@ -228,7 +227,7 @@ impl Module for ProcessModule {
             Event::Decontaminate => {("decontaminate", Value::Null)}
         };
 
-        let data_clone = data.clone();
+        let _data_clone = data.clone();
         self.send_event(event_type, data)
             .map_err(|e| ModuleError::EventFailed(e))?;
 

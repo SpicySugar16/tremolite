@@ -21,7 +21,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -417,7 +416,7 @@ pub struct InstalledModule {
 }
 
 impl InstalledModule {
-    fn from_path(path: &Path) -> Option<Self> {
+    fn _from_path(path: &Path) -> Option<Self> {
         let manifest_path = path.join("manifest.toml");
         let content = fs::read_to_string(&manifest_path).ok()?;
         let manifest: Manifest = toml::from_str(&content).ok()?;

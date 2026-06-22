@@ -8,12 +8,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tremolite_llm::{
-    LLMProvider, Message, PromptBuilder, PromptContext, PromptContributor, ProviderRegistry,
+    Message, PromptBuilder, PromptContext, ProviderRegistry,
     ToolCallLoop, ToolExecutor,
 };
 
 use crate::gateway::OutboundMessage;
-use crate::module::{Event, EventContext, EventResponse, ModuleRegistry};
+use crate::module::{Event, EventContext, ModuleRegistry};
 
 /// 调度器收到的任务
 pub struct SessionTask {
@@ -56,6 +56,7 @@ pub struct SchedulerShared {
 }
 
 struct SessionWorkerHandle {
+    #[allow(dead_code)]
     session_id: String,
     _thread: thread::JoinHandle<()>,
 }
@@ -242,7 +243,7 @@ impl SessionWorker {
 
         // 从 MemoryModule 获取本 session 的历史
         tracing::info!("process step 3: getting history");
-        let mut history: Vec<Message> = self.modules.with_module("memory", |m| {
+        let history: Vec<Message> = self.modules.with_module("memory", |m| {
             m.as_any()
                 .and_then(|any| any.downcast_ref::<crate::modules::memory::MemoryModule>())
                 .map(|mm| {
@@ -335,7 +336,7 @@ impl SessionWorker {
 
 impl SessionWorker {
     /// 处理斜杠命令——不走 LLM，直接从模块获取数据响应
-    fn handle_command(&mut self, input: &str, channel: &str) -> String {
+    fn handle_command(&mut self, input: &str, _channel: &str) -> String {
         let trimmed = input.trim();
         let parts: Vec<&str> = trimmed.splitn(2, |c: char| c == ' ' || c == '\t').collect();
         let cmd = parts[0];

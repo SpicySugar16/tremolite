@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
 use tremolite_llm::{
-    LLMProvider, Message, PromptBuilder, PromptContext, PromptContributor, ProviderRegistry,
-    ToolCallLoop, ToolCallRecord, ToolExecutor,
+    PromptBuilder, PromptContext, PromptContributor, ProviderRegistry, ToolExecutor,
 };
 
 /// 核心引擎版本号 — 编译时从 Cargo.toml 注入
@@ -57,6 +55,7 @@ pub struct TremoliteEngine {
     pub router: GatewayRouter,
     pub modules: ModuleRegistry,
 
+    #[allow(dead_code)]
     data_dir: PathBuf,
     pub base_soul: String,
     pub session_id: String,
@@ -229,18 +228,6 @@ impl ToolExecutor for NoopExecutor {
         Err(format!("Tool '{}' not available (no executor configured)", name))
     }
     fn list_tools(&self) -> Vec<ToolDefinition> { Vec::new() }
-}
-
-struct WrapperExecutor<'a> {
-    inner: &'a dyn ToolExecutor,
-}
-impl<'a> ToolExecutor for WrapperExecutor<'a> {
-    fn execute_tool(&self, name: &str, args: &str) -> Result<String, String> {
-        self.inner.execute_tool(name, args)
-    }
-    fn list_tools(&self) -> Vec<ToolDefinition> {
-        self.inner.list_tools()
-    }
 }
 
 /// 复合工具执行器——先查模块，未找到则回退旧执行器

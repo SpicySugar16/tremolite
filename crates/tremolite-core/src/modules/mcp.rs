@@ -1,5 +1,4 @@
 use std::any::Any;
-use std::collections::HashMap;
 
 use tremolite_llm::{ToolDefinition, ToolFunction};
 use tremolite_mcp::{McpManager, McpServerConfig};

@@ -242,6 +242,7 @@ pub fn run_tui(engine: &mut TremoliteEngine) -> Result<(), String> {
 // ─── 消息类型 ────────────────────────────────────
 
 struct ChatMessage {
+    #[allow(dead_code)]
     sender: String,
     content: String,
     style: MessageStyle,

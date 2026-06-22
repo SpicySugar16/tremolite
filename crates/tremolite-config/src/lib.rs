@@ -3,9 +3,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::env;
 
-/// 用户级运行时目录（用于隔离敏感配置）
-const RUNTIME_DIR: &str = "~/.tremolite";
-
 use tremolite_llm::{
     ProviderRegistry, LLMProvider,
     OpenAIProvider, DeepSeekProvider, OllamaProvider,

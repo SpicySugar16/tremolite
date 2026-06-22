@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};
-use crate::protocol::types::{PowerCoupling, ModuleMessage, MessageEvent, ModuleDeclaration, ModuleAuthor, ServiceDefinition, ModuleHealth, ModuleStatus};
+use crate::protocol::types::{PowerCoupling, ModuleMessage, MessageEvent, ModuleDeclaration, ModuleHealth, ModuleStatus};
 pub use tremolite_llm::{LLMProvider, ToolDefinition};
 
 pub mod process_module;

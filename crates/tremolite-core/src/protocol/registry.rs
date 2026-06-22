@@ -9,15 +9,8 @@
 use std::collections::HashMap;
 
 use super::types::{
-    ModuleDeclaration, ModuleHealth, ModuleStatus, ServiceDefinition,
+    ModuleDeclaration, ModuleHealth, ModuleStatus,
 };
-
-/// 服务注册条目
-#[derive(Clone)]
-struct ServiceEntry {
-    module_id: String,
-    service: ServiceDefinition,
-}
 
 /// 服务注册表——维护模块与服务的映射
 ///

@@ -1,5 +1,5 @@
 use std::any::Any;
-use tremolite_attention::{MultiScaleAttention, AttentionScale, AttentionResult};
+use tremolite_attention::{MultiScaleAttention, AttentionResult};
 use tremolite_llm::ToolDefinition;
 use crate::module::{Module, Capability, ModuleError, Event, EventResponse, EventContext};
 

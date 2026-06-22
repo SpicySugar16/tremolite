@@ -194,6 +194,24 @@ fn main() {
 
     // ── 4. 注册所有模块 ──────────────────────────
     let d = data_dir.clone();
+
+    // 读取用户配置（用户名/AI名）
+    let (ai_name, username) = {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let profile_path = std::path::Path::new(&home).join(".tremolite/profiles/aoi/profile.json");
+        if let Ok(content) = std::fs::read_to_string(&profile_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                (
+                    json.get("ai_name").and_then(|v| v.as_str()).unwrap_or("葵").to_string(),
+                    json.get("username").and_then(|v| v.as_str()).unwrap_or("琳玲").to_string(),
+                )
+            } else {
+                ("葵".to_string(), "琳玲".to_string())
+            }
+        } else {
+            ("葵".to_string(), "琳玲".to_string())
+        }
+    };
     // 模块资源路径从配置包读
     let tm_path = profile_dir.join("tone_map.json").to_string_lossy().to_string();
     let em_path = profile_dir.join("emotion.json").to_string_lossy().to_string();
@@ -208,7 +226,13 @@ fn main() {
 
     let _ = engine.register_module(Box::new(DashboardModule::new()));
 
-    let _ = engine.register_module(Box::new(MemoryModule::new(d.clone())));
+    let memory_data_base = profile_dir.join("data");
+    if !memory_data_base.exists() {
+        std::fs::create_dir_all(&memory_data_base).unwrap_or(());
+    }
+    let _ = engine.register_module(Box::new(
+        MemoryModule::new(memory_data_base).with_names(&ai_name, &username)
+    ));
     let _ = engine.register_module(Box::new(SessionModule::new(1800)));
     let mut attn = AttentionModule::new();
     if let Some(ref cfg) = config {
@@ -615,19 +639,6 @@ fn handle_session(action: &str, _args: &[String], _config: Option<&Config>) {
         other => {
             println!("Unknown session action: '{}'. Try: list", other);
         }
-    }
-}
-
-/// Vec<String> 排序辅助
-trait SortedExt {
-    fn sorted(&self) -> Vec<String>;
-}
-
-impl SortedExt for Vec<String> {
-    fn sorted(&self) -> Vec<String> {
-        let mut v = self.clone();
-        v.sort();
-        v
     }
 }
 

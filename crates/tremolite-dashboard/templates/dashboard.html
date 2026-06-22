@@ -1025,6 +1025,55 @@ async function renderConfig(el,d){
         html+='</div>';
       }
       html+='</div>';
+
+      // 用户设定卡片
+      html+='<!-- 用户设定 -->';
+      try{
+        const pr=await api('/dashboard/config/profile');
+        if(pr.status==='ok'){
+          const u=pr.data||{};
+          html+='<div class="card"><div class="card-hd"><h3>👤 用户设定</h3><span style="font-size:0.65rem;color:var(--fg3)">'+esc(pr.path||'')+'</span></div>'+
+            // 用户行
+            '<div style="display:flex;align-items:center;gap:10px;padding:4px 0">'+
+            '<div style="cursor:pointer;flex-shrink:0;position:relative" onclick="document.getElementById(\'cfgUserFile\').click()">'+
+              '<img id="cfgUserAvatarImg" src="'+(u.user_avatar?'/avatars/'+esc(u.user_avatar):'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23ddd%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 font-size=%2218%22 fill=%22%23999%22%3E?%3C/text%3E%3C/svg%3E')+'" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border)">'+
+            '</div>'+
+            '<input type="file" id="cfgUserFile" accept="image/*" style="display:none" onchange="uploadAvatar(this,\'user\')">'+
+            '<label style="font-size:0.72rem;color:var(--fg2);white-space:nowrap;flex-shrink:0">用户名称</label>'+
+            '<input type="text" id="cfgUsername" value="'+esc(u.username||'')+'" style="max-width:200px;flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--fg);font-size:0.78rem;outline:none" oninput="autoSaveName()">'+
+            '</div>'+
+            // AI行
+            '<div style="display:flex;align-items:center;gap:10px;padding:4px 0">'+
+            '<div style="cursor:pointer;flex-shrink:0;position:relative" onclick="document.getElementById(\'cfgAiFile\').click()">'+
+              '<img id="cfgAiAvatarImg" src="'+(u.ai_avatar?'/avatars/'+esc(u.ai_avatar):'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23ddd%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 font-size=%2218%22 fill=%22%23999%22%3E?%3C/text%3E%3C/svg%3E')+'" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border)">'+
+            '</div>'+
+            '<input type="file" id="cfgAiFile" accept="image/*" style="display:none" onchange="uploadAvatar(this,\'ai\')">'+
+            '<label style="font-size:0.72rem;color:var(--fg2);white-space:nowrap;flex-shrink:0">AI 名称</label>'+
+            '<input type="text" id="cfgAiName" value="'+esc(u.ai_name||'')+'" style="max-width:200px;flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--fg);font-size:0.78rem;outline:none" oninput="autoSaveName()">'+
+            '</div>'+
+            '<div style="display:flex;gap:8px;align-items:center;margin-top:4px">'+
+            '<button class="btn sm accent" onclick="saveProfileConfig()">💾 手动保存</button>'+
+            '<button class="btn sm" onclick="loadProfileConfig()">🔄 刷新</button>'+
+            '<span id="cfgProfileMsg" style="font-size:0.7rem;color:var(--fg3)"></span></div></div>';
+        }
+      }catch(e){}
+
+      // 配置隔离检查卡片
+      try{
+        const chk=await api('/dashboard/config/check');
+        if(chk.status==='ok'){
+          html+='<div class="card"><div class="card-hd"><h3>📋 配置隔离检查</h3></div>'+
+            '<div style="font-size:0.72rem;color:var(--fg2)">配置包路径: <code style="font-size:0.68rem">'+esc(chk.profile_path||'')+'</code></div>'+
+            '<div style="font-size:0.72rem;color:var(--fg2);margin-bottom:6px">数据路径: <code style="font-size:0.68rem">'+esc(chk.data_path||'')+'</code></div>'+
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px">'+
+            (chk.in_profile||[]).map(function(f){return '<span style="font-size:0.65rem;background:#1b5e20;color:#a5d6a7;padding:1px 5px;border-radius:3px">✓ '+esc(f)+'</span>';}).join('')+
+            (chk.in_data||[]).map(function(f){return '<span style="font-size:0.65rem;background:#e65100;color:#ffcc80;padding:1px 5px;border-radius:3px">⚠ data/ '+esc(f)+'</span>';}).join('')+
+            '</div>'+
+            (chk.data_leftovers&&chk.data_leftovers.length>0?'<div style="font-size:0.65rem;color:var(--fg3);margin-top:4px">data/ 遗留文件: '+chk.data_leftovers.length+' 个</div>':'')+
+            '</div>';
+        }
+      }catch(e){}
+
       el.innerHTML=html;
     }
   }catch(e){}
@@ -1139,6 +1188,9 @@ async function renderModule(el,modId,statusData){
         return;
       }else if(modId==='channels'){
         renderChannelsPage(el,d.data);
+        return;
+      }else if(modId==='memory'){
+        renderMemoryPage(el, d.data);
         return;
       }else{
       for(const [k,v] of Object.entries(d)){
@@ -1288,6 +1340,388 @@ function init(){
     renderContent();
   });
 }
+// ─── Memory Page ────
+function renderMemoryPage(el, data){
+  if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
+  const layers=data.layers||{};
+  const summary=data.summary||{};
+  const meta=data.metabolism||{};
+  
+  window._memoryData=data;
+  
+  let html='';
+  
+  html+='<div class="card"><div class="card-hd"><h3>📦 五层记忆概览</h3></div>'+
+    '<div class="row"><span class="l">存储路径</span><span class="v" style="font-size:0.7rem;font-family:var(--mono)">'+esc(summary.storage_path||'')+'</span></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">'+
+    '<span class="badge-accent" style="background:#4CAF50;color:#fff">L1: '+(summary.l1||0)+'条</span>'+
+    '<span class="badge-accent" style="background:#2196F3;color:#fff">L2: '+(summary.l2||0)+'条</span>'+
+    '<span class="badge-accent" style="background:#FF9800;color:#fff">L3: '+(summary.l3||0)+'条</span>'+
+    '<span class="badge-accent" style="background:#9C27B0;color:#fff">RAM: '+(summary.ram||0)+'条</span>'+
+    '<span class="badge-accent" style="background:#607D8B;color:#fff">Disk: '+(summary.disk||0)+'条</span>'+
+    '</div>'+
+    '<div style="font-size:0.72rem;color:var(--fg2)">代谢阈值：降级 '+(meta.demote_threshold||0.3)+' / 晋升 '+(meta.promote_threshold||0.7)+'</div>'+
+    '</div>';
+
+  // ── 权重编辑卡片 ──
+  var weights=meta.weights||{l1:1.0,l2:2.0,l3:3.0,ram:1.5,disk:0.5};
+  var weightLabels={'l1':'L1 工作记忆','l2':'L2 画像记忆','l3':'L3 索引层','ram':'RAM 缓存','disk':'Disk 归档'};
+  var weightTiers=['l1','l2','l3','ram','disk'];
+  html+='<div class="card"><div class="card-hd"><h3>⚖️ 层权重赋值</h3></div><div style="display:flex;flex-direction:column;gap:6px">';
+  for(var wi=0;wi<weightTiers.length;wi++){
+    var wt=weightTiers[wi];
+    html+='<div class="dim-row"><div class="dim-label" style="width:80px;text-align:left;font-size:0.78rem;color:var(--fg2)">'+esc(weightLabels[wt])+'</div>'+
+      '<input type="range" class="dim-slider" min="0" max="5" step="0.1" value="'+(weights[wt]||1.0)+'" data-weight-key="'+wt+'" oninput="updateWeightSlider(this)">'+
+      '<input type="number" class="dim-input" min="0" max="5" step="0.1" value="'+(weights[wt]||1.0).toFixed(1)+'" onchange="updateWeightNumber(this,\''+wt+'\')" style="width:48px"></div>';
+  }
+  html+='<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">权重影响各层记忆的重要性评分，数值越大该层越重要。</div></div></div>';
+
+  // 搜索栏
+  html+='<div class="card"><div class="card-hd"><h3>🔍 搜索记忆</h3></div>'+
+    '<div style="display:flex;gap:6px;padding:4px 0">'+
+    '<input type="text" id="memSearchInput" placeholder="输入关键词搜索 L2 / L3 / Disk..." style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.8rem;outline:none" onkeydown="if(event.key===\'Enter\')doMemSearch()">'+
+    '<button class="btn sm accent" onclick="doMemSearch()">🔍 搜索</button>'+
+    '</div>'+
+    '<div style="font-size:0.7rem;color:var(--fg3);margin-top:4px">搜索范围：L2内容+标签 / L3摘要+RAM完整内容 / Disk关键词+Store完整内容</div>'+
+    '</div>'+
+    '<div id="memSearchResults"></div>';
+
+  const tabs=['l1','l2','l3','ram','disk'];
+  const tabLabels={'l1':'L1 工作记忆','l2':'L2 画像记忆','l3':'L3 索引层','ram':'RAM 缓存','disk':'Disk 归档'};
+  const tabColors={'l1':'#4CAF50','l2':'#2196F3','l3':'#FF9800','ram':'#9C27B0','disk':'#607D8B'};
+  
+  html+='<div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">';
+  for(const t of tabs){
+    html+='<button class="btn sm" style="border-left:3px solid '+(tabColors[t]||'var(--accent)')+'" onclick="switchMemTab(\''+t+'\')" id="memTabBtn_'+t+'">'+esc(tabLabels[t])+'</button>';
+  }
+  html+='</div>';
+  
+  html+='<div id="memTabContent"></div>';
+  
+  html+='<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px">'+
+    '<button class="btn sm" onclick="refreshMemoryPage()">↻ 刷新</button>'+
+    '<span style="color:var(--fg3);font-size:0.72rem">memory 模块 v'+esc(data.version||'0.3.0')+'</span></div>';
+
+  el.innerHTML=html;
+
+  switchMemTab('l1');
+}
+
+window.refreshMemoryPage=function(){
+  var el=document.getElementById('pageContent');
+  var scroller=document.querySelector('.content');
+  var savedTop=scroller?scroller.scrollTop:0;
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  api('/dashboard/engine/memory').then(function(d){
+    if(d.status==='ok'&&d.data){
+      renderMemoryPage(el,d.data);
+      if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
+    }else{
+      el.innerHTML='<div class="error">刷新失败</div>';
+    }
+  }).catch(function(e){
+    el.innerHTML='<div class="error">网络错误: '+esc(e.message)+'</div>';
+  });
+};
+
+var weightDebounce=null;
+window.updateWeightSlider=function(el){
+  var key=el.dataset.weightKey;
+  var val=parseFloat(el.value);
+  el.nextElementSibling.value=val.toFixed(1);
+  clearTimeout(weightDebounce);
+  weightDebounce=setTimeout(function(){
+    // 模拟自动更新（前端本地缓存）
+    // 后续可以有 POST 接口写入配置
+  },300);
+};
+window.updateWeightNumber=function(el,key){
+  var val=Math.min(5,Math.max(0,parseFloat(el.value)||0));
+  el.value=val.toFixed(1);
+  el.previousElementSibling.value=val;
+};
+
+function switchMemTab(tab){
+  document.querySelectorAll('[id^="memTabBtn_"]').forEach(function(btn){
+    btn.style.background='var(--bg)';
+    btn.style.borderLeft='3px solid var(--border)';
+  });
+  var btn=document.getElementById('memTabBtn_'+tab);
+  if(btn) btn.style.background='var(--accent-dim)';
+  
+  renderMemTabContent(tab);
+}
+
+function renderMemTabContent(tab){
+  var data=window._memoryData;
+  if(!data) return;
+  var layers=data.layers||{};
+  var entries=layers[tab]||[];
+  var container=document.getElementById('memTabContent');
+  if(!container) return;
+  
+  var html='';
+  if(entries.length===0){
+    html='<div class="card"><div class="card-hd"><h3>'+esc(tabLabel(tab))+'</h3></div><div style="padding:16px;text-align:center;color:var(--fg3);font-size:0.8rem">暂无数据</div></div>';
+    container.innerHTML=html;
+    return;
+  }
+  
+  html='<div class="card"><div class="card-hd"><h3>'+esc(tabLabel(tab))+'</h3><span style="font-size:0.72rem;color:var(--fg3)">共 '+entries.length+' 条</span></div>';
+  
+  if(tab==='l1'){
+    for(var i=0;i<entries.length;i++){
+      var e=entries[i];
+      html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
+        '<div style="display:flex;justify-content:space-between;align-items:start">'+
+        '<span style="flex:1;color:var(--fg2);word-break:break-all">'+esc((e.content||'').substring(0,100))+'</span>'+
+        '<span style="margin-left:8px;white-space:nowrap">'+
+        (e.importance!==undefined?'<span style="color:'+(e.importance>0.7?'var(--accent)':e.importance>0.4?'#FF9800':'#f44336')+'">'+e.importance.toFixed(2)+'</span>':'')+
+        '</span></div>'+
+        '<div style="margin-top:2px;display:flex;gap:4px;flex-wrap:wrap">'+
+        (e.tags?e.tags.map(function(t){return '<span style="font-size:0.65rem;background:var(--bg2);padding:1px 5px;border-radius:3px;color:var(--fg3)">'+esc(t)+'</span>';}).join(''):'')+
+        (e.source?'<span style="font-size:0.65rem;color:var(--fg3)">来源:'+esc(e.source)+'</span>':'')+
+        (e.created_at?'<span style="font-size:0.65rem;color:var(--fg3)">'+(new Date(e.created_at*1000)).toLocaleString()+'</span>':'')+
+        '</div></div>';
+    }
+  }else if(tab==='l2'){
+    for(var i=0;i<entries.length;i++){
+      var e=entries[i];
+      html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
+        '<div style="display:flex;justify-content:space-between;align-items:start">'+
+        '<span style="flex:1;color:var(--fg2);word-break:break-all">'+esc((e.content||'').substring(0,100))+'</span>'+
+        '<span style="margin-left:8px;white-space:nowrap">'+
+        (e.importance!==undefined?'<span style="color:'+(e.importance>0.7?'var(--accent)':e.importance>0.4?'#FF9800':'#f44336')+'">'+e.importance.toFixed(2)+'</span>':'')+
+        '</span></div>'+
+        '<div style="margin-top:2px;display:flex;gap:4px;flex-wrap:wrap">'+
+        (e.tags?e.tags.map(function(t){return '<span style="font-size:0.65rem;background:var(--bg2);padding:1px 5px;border-radius:3px;color:var(--fg3)">'+esc(t)+'</span>';}).join(''):'')+
+        (e.created_at?'<span style="font-size:0.65rem;color:var(--fg3)">'+(new Date(e.created_at*1000)).toLocaleString()+'</span>':'')+
+        '</div></div>';
+    }
+  }else if(tab==='l3'){
+    for(var i=0;i<entries.length;i++){
+      var e=entries[i];
+      html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center">'+
+        '<span style="flex:1;color:var(--fg2)">'+esc((e.summary||'').substring(0,80))+'</span>'+
+        '<span style="margin-left:8px">'+
+        (e.has_embedding?'<span style="color:#9C27B0;font-size:0.65rem">🧠 有向量</span>':'<span style="color:var(--fg3);font-size:0.65rem">无向量</span>')+
+        '</span></div>'+
+        (e.created_at?'<div style="font-size:0.65rem;color:var(--fg3);margin-top:2px">'+(new Date(e.created_at*1000)).toLocaleString()+'</div>':'')+
+        '</div>';
+    }
+  }else if(tab==='ram'){
+    for(var i=0;i<entries.length;i++){
+      var e=entries[i];
+      html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
+        '<div style="color:var(--fg2);word-break:break-all">'+esc((e.content_preview||'').substring(0,120))+'</div>'+
+        (e.created_at?'<div style="font-size:0.65rem;color:var(--fg3);margin-top:2px">'+(new Date(e.created_at*1000)).toLocaleString()+'</div>':'')+
+        '</div>';
+    }
+  }else if(tab==='disk'){
+    for(var i=0;i<entries.length;i++){
+      var e=entries[i];
+      html+='<div style="padding:6px 8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
+        '<span style="color:var(--fg2)">'+esc((e.keyword||'').substring(0,100))+'</span>'+
+        (e.created_at?'<span style="margin-left:8px;font-size:0.65rem;color:var(--fg3)">'+(new Date(e.created_at*1000)).toLocaleString()+'</span>':'')+
+        '</div>';
+    }
+  }
+  
+  html+='</div>';
+  container.innerHTML=html;
+}
+
+function tabLabel(tab){
+  var m={'l1':'L1 工作记忆','l2':'L2 画像记忆','l3':'L3 索引层','ram':'RAM 缓存','disk':'Disk 归档'};
+  return m[tab]||tab;
+}
+
+// 记忆中搜索
+function doMemSearch(){
+  var q=document.getElementById('memSearchInput').value.trim();
+  if(!q){ return; }
+  var el=document.getElementById('memSearchResults');
+  el.innerHTML='<div class="loading">搜索中...</div>';
+  api('/dashboard/engine/memory/search?q='+encodeURIComponent(q)).then(function(d){
+    if(d.status!=='ok'||!d.results){
+      el.innerHTML='<div class="card"><div class="error">搜索失败</div></div>';
+      return;
+    }
+    var results=d.results||[];
+    var html='<div class="card"><div class="card-hd"><h3>🔍 搜索结果</h3><span style="font-size:0.72rem;color:var(--fg3)">共 '+results.length+' 条</span>'+
+      '<span style="font-size:0.65rem;color:var(--fg3);margin-left:8px">'+esc(d.memory_path||'')+'</span></div>';
+    
+    if(results.length===0){
+      html+='<div style="padding:12px;text-align:center;color:var(--fg3);font-size:0.8rem">未找到匹配条目</div></div>';
+      el.innerHTML=html;
+      return;
+    }
+    
+    for(var i=0;i<results.length;i++){
+      var r=results[i];
+      var layerColor={'l2':'#2196F3','l3':'#FF9800','disk':'#607D8B'};
+      var layerLabel={'l2':'L2 画像','l3':'L3 索引+RAM','disk':'Disk 归档'};
+      
+      html+='<div style="padding:8px;border-bottom:1px solid var(--bg3);font-size:0.75rem;'+(i%2===1?'background:var(--bg2)':'')+'">'+
+        '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:4px">'+
+        '<span class="badge-accent" style="background:'+(layerColor[r.layer]||'var(--accent)')+';color:#fff;font-size:0.65rem;padding:1px 6px;border-radius:3px">'+esc(layerLabel[r.layer]||r.layer)+'</span>'+
+        '<div style="display:flex;gap:4px">'+
+        '<button class="btn sm" onclick="editMemItem(\''+esc(r.layer)+'\',\''+esc(r.id_str||r.key||String(r.id))+'\','+(r.id||0)+')" style="padding:2px 6px;font-size:0.7rem">✏️</button>'+
+        '<button class="btn sm" onclick="deleteMemItem(\''+esc(r.layer)+'\',\''+esc(r.id_str||r.key||String(r.id))+'\','+(r.id||0)+')" style="padding:2px 6px;font-size:0.7rem;color:#f44336">🗑️</button>'+
+        '</div></div>';
+      
+      if(r.layer==='l2'){
+        html+='<div style="color:var(--fg2);margin:2px 0">'+esc((r.content||'').substring(0,200))+'</div>'+
+          (r.tags?'<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">'+(Array.isArray(r.tags)?r.tags.map(function(t){return '<span style="font-size:0.65rem;background:var(--bg2);padding:1px 4px;border-radius:3px;color:var(--fg3)">'+esc(typeof t==='string'?t:JSON.stringify(t))+'</span>';}).join(''):'')+'</div>':'')+
+          (r.importance!==undefined?'<div style="font-size:0.65rem;color:var(--fg3);margin-top:2px">重要度: '+(typeof r.importance==='number'?r.importance.toFixed(2):r.importance)+'</div>':'');
+      }else if(r.layer==='l3'){
+        html+='<div style="color:var(--fg2);margin:2px 0"><strong>摘要：</strong>'+esc(r.summary||'')+'</div>'+
+          (r.ram_content?'<div style="margin-top:4px;padding:4px 6px;background:var(--bg);border-radius:var(--radius-sm);border-left:3px solid #9C27B0"><span style="color:#9C27B0;font-size:0.65rem">📦 RAM 完整内容：</span><div style="color:var(--fg2);font-size:0.72rem;margin-top:2px">'+esc(r.ram_content.substring(0,300))+'</div></div>':'')+
+          (r.has_embedding?'<span style="font-size:0.65rem;color:#9C27B0">🧠 有向量</span>':'');
+      }else if(r.layer==='disk'){
+        html+='<div style="color:var(--fg2);margin:2px 0"><strong>关键词：</strong>'+esc(r.keyword||'')+'</div>'+
+          (r.store_content?'<div style="margin-top:4px;padding:4px 6px;background:var(--bg);border-radius:var(--radius-sm);border-left:3px solid #607D8B"><span style="color:#607D8B;font-size:0.65rem">🗄️ Disk Store 完整内容：</span><div style="color:var(--fg2);font-size:0.72rem;margin-top:2px">'+esc(r.store_content.substring(0,300))+'</div></div>':'');
+      }
+      
+      html+=(r.created_at?'<div style="font-size:0.65rem;color:var(--fg3);margin-top:2px">'+(new Date(r.created_at*1000)).toLocaleString()+'</div>':'')+
+        '</div>';
+    }
+    
+    html+='</div>';
+    el.innerHTML=html;
+  }).catch(function(e){
+    el.innerHTML='<div class="card"><div class="error">网络错误: '+esc(e.message)+'</div></div>';
+  });
+}
+
+function deleteMemItem(layer, idStr, idNum){
+  if(!confirm('确定要删除这条 '+layer.toUpperCase()+' 记忆条目？\n'+(layer==='l3'?'（将同时删除对应的 RAM 内容）':'')+(layer==='disk'?'（将同时删除对应的 Disk Store 文件）':''))) return;
+  api('/dashboard/engine/memory/delete', {
+    method:'POST',
+    body:JSON.stringify({layer:layer, id_str:idStr, id_num:idNum}),
+    headers:{'Content-Type':'application/json'}
+  }).then(function(d){
+    if(d.status==='ok'){
+      doMemSearch();
+    }else{
+      alert('删除失败');
+    }
+  }).catch(function(e){
+    alert('网络错误: '+e.message);
+  });
+}
+
+function editMemItem(layer, idStr, idNum){
+  api('/dashboard/engine/memory/search?q='+encodeURIComponent(document.getElementById('memSearchInput').value.trim())).then(function(d){
+    if(d.status!=='ok'||!d.results) return;
+    var currentContent='';
+    for(var i=0;i<d.results.length;i++){
+      var r=d.results[i];
+      var rid=r.id_str||r.key||String(r.id);
+      if(r.layer===layer && rid===idStr){
+        currentContent=r.content||r.summary||r.keyword||r.ram_content||r.store_content||'';
+        break;
+      }
+    }
+    var newContent=prompt('编辑 '+layer.toUpperCase()+' 记忆内容：', currentContent);
+    if(newContent===null||newContent.trim()==='') return;
+    api('/dashboard/engine/memory/update', {
+      method:'POST',
+      body:JSON.stringify({layer:layer, id_str:idStr, id_num:idNum, content:newContent.trim()}),
+      headers:{'Content-Type':'application/json'}
+    }).then(function(r2){
+      if(r2.status==='ok'){
+        doMemSearch();
+      }else{
+        alert('更新失败');
+      }
+    }).catch(function(e2){
+      alert('网络错误: '+e2.message);
+    });
+  }).catch(function(e){
+    alert('网络错误: '+e.message);
+  });
+}
+
+// 上传头像
+function uploadAvatar(input, type){
+  var file=input.files[0];
+  if(!file) return;
+  if(!file.type.startsWith('image/')){
+    alert('请选择图片文件');
+    return;
+  }
+  var formData=new FormData();
+  formData.append('type', type);
+  formData.append('file', file);
+
+  fetch('/dashboard/config/avatar/upload', {
+    method:'POST',
+    body:formData
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if(d.status==='ok'){
+      var imgId=(type==='user'?'cfgUserAvatarImg':'cfgAiAvatarImg');
+      document.getElementById(imgId).src=d.avatar_url;
+      // 自动保存名字（同时更新 profile.json 中的头像路径）
+      var username=document.getElementById('cfgUsername').value.trim();
+      var ai_name=document.getElementById('cfgAiName').value.trim();
+      var user_avatar=(type==='user'?d.avatar_url.replace('/avatars/',''):document.getElementById('cfgUserAvatarImg').src.replace(/^.*\/avatars\//,''));
+      var ai_avatar=(type==='ai'?d.avatar_url.replace('/avatars/',''):document.getElementById('cfgAiAvatarImg').src.replace(/^.*\/avatars\//,''));
+      fetch('/dashboard/config/profile', {
+        method:'POST',
+        body:JSON.stringify({username:username, ai_name:ai_name, user_avatar:user_avatar, ai_avatar:ai_avatar}),
+        headers:{'Content-Type':'application/json'}
+      });
+    }else{
+      alert('上传失败: '+(d.error||''));
+    }
+  }).catch(function(e){
+    alert('上传失败');
+  });
+}
+
+// 自动保存名字和头像路径
+function autoSaveName(){
+  var username=document.getElementById('cfgUsername').value.trim();
+  var ai_name=document.getElementById('cfgAiName').value.trim();
+  var userAvatarSrc=document.getElementById('cfgUserAvatarImg').src;
+  var aiAvatarSrc=document.getElementById('cfgAiAvatarImg').src;
+  var user_avatar=userAvatarSrc.includes('/avatars/')?userAvatarSrc.split('/avatars/')[1]:'';
+  var ai_avatar=aiAvatarSrc.includes('/avatars/')?aiAvatarSrc.split('/avatars/')[1]:'';
+  if(window._autoSaveTimer) clearTimeout(window._autoSaveTimer);
+  window._autoSaveTimer=setTimeout(function(){
+    fetch('/dashboard/config/profile', {
+      method:'POST',
+      body:JSON.stringify({username:username, ai_name:ai_name, user_avatar:user_avatar, ai_avatar:ai_avatar}),
+      headers:{'Content-Type':'application/json'}
+    });
+  }, 500);
+}
+
+// 手动保存（保留供兼容）
+function saveProfileConfig(){ autoSaveName(); }
+
+// 刷新用户配置
+function loadProfileConfig(){
+  var msg=document.getElementById('cfgProfileMsg');
+  msg.textContent='刷新中...';
+  api('/dashboard/config/profile').then(function(d){
+    if(d.status==='ok'&&d.data){
+      var u=d.data;
+      document.getElementById('cfgUsername').value=u.username||'';
+      document.getElementById('cfgAiName').value=u.ai_name||'';
+      document.getElementById('cfgUserAvatarImg').src=u.user_avatar?'/avatars/'+esc(u.user_avatar):'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23ddd%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 font-size=%2218%22 fill=%22%23999%22%3E?%3C/text%3E%3C/svg%3E';
+      document.getElementById('cfgAiAvatarImg').src=u.ai_avatar?'/avatars/'+esc(u.ai_avatar):'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23ddd%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 font-size=%2218%22 fill=%22%23999%22%3E?%3C/text%3E%3C/svg%3E';
+      msg.textContent='✓ 已刷新';
+      msg.style.color='var(--green, #4CAF50)';
+    }
+  }).catch(function(e){
+    msg.textContent='✗ 刷新失败';
+    msg.style.color='#f44336';
+  });
+}
+
 document.addEventListener('DOMContentLoaded',init);
 </script>
 </body>

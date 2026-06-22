@@ -10,13 +10,23 @@ use crate::module::{Module, Capability, ModuleError, Event, EventResponse, Event
 /// 按 session_id 标签隔离不同会话的记忆
 pub struct MemoryModule {
     manager: MemoryManager,
+    ai_name: String,
+    username: String,
 }
 
 impl MemoryModule {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             manager: MemoryManager::new(data_dir.join("memory")),
+            ai_name: "葵".to_string(),
+            username: "琳玲".to_string(),
         }
+    }
+
+    pub fn with_names(mut self, ai_name: &str, username: &str) -> Self {
+        self.ai_name = ai_name.to_string();
+        self.username = username.to_string();
+        self
     }
 
     fn session_tag(sid: &str) -> String {
@@ -67,7 +77,7 @@ impl MemoryModule {
             for (i, entry) in buf.entries().iter().enumerate() {
                 let trimmed = entry.content.trim();
                 let short = trimmed.chars().count() < 5;
-                let command_trace = trimmed.starts_with("kamisama: /");
+                let command_trace = trimmed.starts_with(&format!("{}: /", self.username));
                 let noise_only =
                     trimmed.chars().all(|c| c.is_whitespace() || c.is_ascii_punctuation());
                 let pure_command = trimmed.starts_with('/') && trimmed.len() < 10;
@@ -265,18 +275,20 @@ impl Module for MemoryModule {
             Event::OnMessage { input, channel } => {
                 self.manager.remember(
                     &ctx.session_id,
-                    format!("kamisama: {}", input),
+                    format!("{}: {}", self.username, input),
                     vec![format!("channel:{}", channel), tag],
                     0.6, channel.clone(),
                 );
+                let _ = self.manager.flush_all();
                 Ok(EventResponse::Pass)
             }
             Event::OnResponse { response } => {
                 self.manager.remember(
                     &ctx.session_id,
-                    format!("葵: {}", response),
+                    format!("{}: {}", self.ai_name, response),
                     vec!["response".into(), tag], 0.5, "internal".into(),
                 );
+                let _ = self.manager.flush_all();
                 Ok(EventResponse::Pass)
             }
             Event::Shutdown => {
