@@ -447,15 +447,16 @@ function renderChannelsTable(el){
   if(!ch.length){
     html+='<div class="loading" style="padding:12px">暂无通道。点「+ 添加」创建一个~</div>';
   }else{
-    html+='<table class="hist-table"><thead><tr><th>#</th><th>名称</th><th>类型</th><th>目标</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+    html+='<table class="hist-table"><thead><tr><th>#</th><th>名称</th><th>类型</th><th>目标</th><th>共享</th><th>状态</th><th>操作</th></tr></thead><tbody>';
     for(let i=0;i<ch.length;i++){
       const c=ch[i];
       const configStr=c.config?Object.keys(c.config).map(k=>k+': '+esc(String(c.config[k]))).join('<br>'):'—';
       html+='<tr><td>'+(i+1)+'</td>'+
         '<td style="font-family:var(--mono);font-size:0.78rem;color:var(--accent)">'+esc(c.name||c.id)+'</td>'+
         '<td>'+esc(c.type||'?')+'</td>'+
-        '<td style="font-size:0.72rem;color:var(--fg2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(configStr.replace(/<br>/g,' | '))+'">'+
+        '<td style="font-size:0.72rem;color:var(--fg2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(configStr.replace(/<br>/g,' | '))+'\n'+(c.broadcast_target?'目标: '+c.broadcast_target:'')+'">'+
           (c.broadcast_target||'—')+'</td>'+
+        '<td style="text-align:center"><span style="color:'+(c.share_session!==false?'var(--accent)':'var(--fg3)')+'">'+(c.share_session!==false?'✓':'✕')+'</span></td>'+
         '<td><span style="color:var(--green);font-size:0.72rem">\u25C9 已注册</span></td>'+
         '<td style="display:flex;gap:3px;justify-content:center">'+
         '<button class="btn sm" onclick="showChannelsEdit('+i+')" title="修改">\u270F\uFE0F</button>'+
@@ -504,9 +505,15 @@ function renderChannelsTable(el){
     '<div style="margin-top:8px"><label style="display:block;color:var(--fg2);font-size:0.78rem;margin-bottom:4px">广播目标（可选）</label>'+
     '<input id="chBroadcast" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.85rem;outline:none" placeholder="例：group_12345">'+
 
+    '<div style="margin-top:10px;display:flex;align-items:center;gap:6px">'+
+    '<label class="toggle"><input id="chShareSession" type="checkbox" checked><span class="sl"></span></label>'+
+    '<span style="color:var(--fg2);font-size:0.78rem">默认共享会话</span>'+
+    '<span style="color:var(--fg3);font-size:0.7rem;margin-left:4px">该通道创建的会话默认允许其他会话查看</span></div>'+
+
     '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">'+
     '<button class="btn" onclick="closeChannelsDlg()">取消</button>'+
-    '<button class="btn accent" onclick="doSaveChannel()">保存</button></div></div>';
+    '<button class="btn accent" onclick="doSaveChannel()">确认</button>'+
+    '<span id="chSaveFeedback" style="font-size:0.72rem;color:var(--green);line-height:28px"></span></div></div>';
 
   el.innerHTML=html;
 }
@@ -530,6 +537,7 @@ window.showChannelsAdd=function(){
   document.getElementById('chNapCatWs').value='';
   document.getElementById('chHttpListen').value='';
   document.getElementById('chBroadcast').value='';
+  document.getElementById('chShareSession').checked=true;
   switchChType();
   document.getElementById('channelsDlg').style.display='flex';
 };
@@ -548,6 +556,7 @@ window.showChannelsEdit=function(idx){
   document.getElementById('chNapCatWs').value=(c.config&&c.config.ws_url)||'';
   document.getElementById('chHttpListen').value=(c.config&&c.config.listen)||'';
   document.getElementById('chBroadcast').value=c.broadcast_target||'';
+  document.getElementById('chShareSession').checked=c.share_session!==false;
   switchChType();
   document.getElementById('channelsDlg').style.display='flex';
 };
@@ -571,19 +580,26 @@ window.doSaveChannel=async function(){
   }else if(type==='Http'){
     config={listen:document.getElementById('chHttpListen').value.trim()};
   }
+  const share_session=document.getElementById('chShareSession').checked;
 
   const channels=[..._channelsData];
   if(idx>=0){
-    channels[idx]={id,name,type,config,broadcast_target};
+    channels[idx]={id,name,type,config,broadcast_target,share_session};
   }else{
-    channels.push({id,name,type,config,broadcast_target});
+    channels.push({id,name,type,config,broadcast_target,share_session});
   }
 
   try{
     const r=await apiPost('/dashboard/channels/save',{channels});
     if(r.status==='ok'){
-      closeChannelsDlg();
       _channelsData=channels;
+      // 自动同步到配置
+      var fb=document.getElementById('chSaveFeedback');
+      if(fb) fb.textContent='已保存，同步中……';
+      await apiPost('/dashboard/channels/sync-config');
+      if(fb) fb.textContent='✓ 已生效';
+      setTimeout(function(){if(fb) fb.textContent='';},2000);
+      closeChannelsDlg();
       renderChannelsTable(document.getElementById('pageContent'));
     }else{
       alert('保存失败: '+(r.error||'未知错误'));
@@ -603,6 +619,8 @@ window.deleteChannel=async function(idx){
     const r=await apiPost('/dashboard/channels/save',{channels});
     if(r.status==='ok'){
       _channelsData=channels;
+      // 自动同步到配置
+      await apiPost('/dashboard/channels/sync-config');
       renderChannelsTable(document.getElementById('pageContent'));
     }else{
       alert('删除失败');
