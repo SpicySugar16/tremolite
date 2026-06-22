@@ -16,6 +16,7 @@ pub struct EmotionModule {
     states: HashMap<String, EmotionState>,
     tone_map: ToneMap,
     emotion_file_path: String,
+    emotion_history_path: String,
     running: Arc<AtomicBool>,
 }
 
@@ -27,14 +28,24 @@ impl EmotionModule {
             states,
             tone_map: ToneMap::load(""),
             emotion_file_path: String::new(),
+            emotion_history_path: String::new(),
             running: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// 指定 tone_map 路径和 emotion_file 路径
+    /// 指定 tone_map 路径、emotion_file 路径和 emotion_history 路径
     pub fn with_tone_map(mut self, tone_map_path: &str, emotion_file_path: &str) -> Self {
         self.tone_map = ToneMap::load(tone_map_path);
         self.emotion_file_path = emotion_file_path.to_string();
+        // 自动推导 history 路径：将 emotion.json 后缀改为 emotion_history.json
+        if emotion_file_path.ends_with("emotion.json") {
+            self.emotion_history_path = emotion_file_path
+                .strip_suffix("emotion.json")
+                .map(|prefix| format!("{}emotion_history.json", prefix))
+                .unwrap_or_else(|| format!("{}_history", emotion_file_path));
+        } else {
+            self.emotion_history_path = format!("{}_history", emotion_file_path);
+        }
         // 如果 emotion_file 存在，从文件恢复状态
         if !emotion_file_path.is_empty() {
             let file = tremolite_emotion::EmotionFile::load(emotion_file_path);
@@ -136,15 +147,38 @@ impl Module for EmotionModule {
 
     fn on_event(&mut self, event: &Event, ctx: &EventContext) -> Result<EventResponse, ModuleError> {
         let file_path = self.emotion_file_path.clone();
+        let history_path = self.emotion_history_path.clone();
         match event {
             Event::OnMessage { input, .. } => {
                 let session_id = ctx.session_id.clone();
                 let state = self.state_for_mut(&session_id);
 
+                // 检测前保存状态副本以判断是否有变化
+                let old_result = state.emotion_result();
                 state.detect_from_text(input);
+                let new_result = state.emotion_result();
 
                 if !file_path.is_empty() {
                     let _ = tremolite_emotion::save_emotion(state, None, &file_path);
+                }
+
+                // 如果情绪标签或强度有变化，追加 manual 历史
+                if old_result.label != new_result.label || old_result.intensity.as_str() != new_result.intensity.as_str() {
+                    if !history_path.is_empty() {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                        let entry = serde_json::json!({
+                            "timestamp": now,
+                            "type": "manual",
+                            "plutchik": {
+                                "joy": state.joy, "sadness": state.sadness, "anger": state.anger,
+                                "fear": state.fear, "surprise": state.surprise, "disgust": state.disgust,
+                                "anticipation": state.anticipation, "trust": state.trust,
+                            },
+                            "style": new_result.label,
+                        });
+                        let _ = tremolite_emotion::append_history(&history_path, &entry);
+                    }
                 }
 
                 Ok(EventResponse::Pass)
@@ -160,6 +194,7 @@ impl Module for EmotionModule {
                     self.running.store(true, Ordering::Relaxed);
                     let running = self.running.clone();
                     let fp = file_path.clone();
+                    let hp = self.emotion_history_path.clone();
 
                     thread::spawn(move || {
                         while running.load(Ordering::Relaxed) {
@@ -203,6 +238,21 @@ impl Module for EmotionModule {
                                 state.natural_fluctuation();
                                 if !fp.is_empty() {
                                     let _ = tremolite_emotion::save_emotion(&state, Some("fluctuation"), &fp);
+                                }
+                                // 追加波动历史
+                                if !hp.is_empty() {
+                                    let result = state.emotion_result();
+                                    let entry = serde_json::json!({
+                                        "timestamp": now,
+                                        "type": "fluctuation",
+                                        "plutchik": {
+                                            "joy": state.joy, "sadness": state.sadness, "anger": state.anger,
+                                            "fear": state.fear, "surprise": state.surprise, "disgust": state.disgust,
+                                            "anticipation": state.anticipation, "trust": state.trust,
+                                        },
+                                        "style": result.label,
+                                    });
+                                    let _ = tremolite_emotion::append_history(&hp, &entry);
                                 }
                             }
                         }

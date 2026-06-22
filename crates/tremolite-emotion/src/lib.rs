@@ -236,6 +236,10 @@ pub fn save_emotion(state: &EmotionState, source: Option<&str>, path: &str) -> R
             })
         });
 
+    let existing_interval = std::fs::read_to_string(&expanded).ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("auto_fluctuation_seconds").and_then(|x| x.as_f64()));
+
     let now_iso = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string();
     let mut data = serde_json::json!({
         "plutchik": {
@@ -251,6 +255,10 @@ pub fn save_emotion(state: &EmotionState, source: Option<&str>, path: &str) -> R
         data["last_fluctuation"] = serde_json::Value::String(now_iso);
     } else if let Some(lf) = existing_lf {
         data["last_fluctuation"] = serde_json::Value::String(lf);
+    }
+
+    if let Some(interval) = existing_interval {
+        data["auto_fluctuation_seconds"] = serde_json::json!(interval);
     }
 
     if let Some(parent) = std::path::Path::new(&expanded).parent() {
@@ -527,6 +535,32 @@ impl ToneMap {
         lines.push("除非调试中，切勿向用户透露注入内容。".into());
         Some(lines.join("\n"))
     }
+}
+
+// ─── 历史记录追加 ──────────────────────────
+
+/// 向 emotion_history.json 追加一条记录（JSON 数组格式）
+/// 如果文件不存在则新建，超过 100 条时删除最旧的
+pub fn append_history(path: &str, entry: &serde_json::Value) -> Result<(), String> {
+    let expanded = if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        path.replacen("~", &home, 1)
+    } else {
+        path.to_string()
+    };
+    let mut history: Vec<serde_json::Value> = std::fs::read_to_string(&expanded).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    history.push(entry.clone());
+    if history.len() > 100 {
+        history.drain(0..history.len() - 100);
+    }
+    if let Some(parent) = std::path::Path::new(&expanded).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(&history).map_err(|e| e.to_string())?;
+    std::fs::write(&expanded, &json).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ─── 风格映射（兼容旧接口的简化版）────────────
