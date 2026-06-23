@@ -121,8 +121,10 @@ const NAV_BASE=[
   {id:'profiles',ico:'\uD83D\uDCE6',label:'配置包'},
 ];
 let currentPage='status',currentParam=null;
+let boardPollTimer=null;
 
 function navigate(page,param){
+  if(boardPollTimer){clearInterval(boardPollTimer);boardPollTimer=null;}
   currentPage=page;currentParam=param||null;
   location.hash='#'+page+(param?':'+param:'');
   renderNav();renderContent();
@@ -178,7 +180,6 @@ async function renderContent(){
       if(currentParam) await renderProfileDetail(el,currentParam);
       else await renderProfiles(el,statusData);
     break;
-
     case 'module': await renderModule(el,currentParam,statusData);break;
     default: el.innerHTML='<div class="card"><div class="loading">未知页面: '+esc(currentPage)+'</div></div>';
   }
@@ -557,7 +558,7 @@ function renderChannelsTable(el){
     '<button class="btn" onclick="closeChannelsDlg()">取消</button>'+
     '<button class="btn accent" onclick="doSaveChannel()">确认</button>'+
     '<span id="chSaveFeedback" style="font-size:0.72rem;color:var(--green);line-height:28px"></span></div></div></div>'+
-    '<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">消息通道 v0.3.0</span></div>';
+    '<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">消息通道 v0.4.0</span></div>';
 
   el.innerHTML=html;
 }
@@ -1112,7 +1113,7 @@ async function renderSessions(el,d){
         html+='<div class="card"><div style="color:var(--fg3);font-size:0.78rem;padding:16px 0;text-align:center">暂无会话记录。</div></div>';
       }
       
-      html+='<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">会话管理器 v0.3.0</span></div>';
+      html+='<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">会话管理器 v0.4.0</span></div>';
       el.innerHTML=html;
     }
   }catch(e){}
@@ -1358,8 +1359,148 @@ window.loadProfile=async function(name){
   }
 };
 
+// ─── Board Module (Plan Book) ────
+async function renderBoardModule(el, modId){
+  try {
+    const [plansRes, activeRes, settingsRes] = await Promise.all([
+      api('/dashboard/plan'),
+      api('/dashboard/plan/active'),
+      api('/dashboard/plan/settings')
+    ]);
+    
+    const plans = plansRes.data || [];
+    const activeData = activeRes.data || {};
+    const activePlan = activeData.active_plan || null;
+    const settings = settingsRes.data || {};
+    
+    let html = '';
+    
+    // 注入卡片——始终显示
+    if (activePlan) {
+      const progressPct = Math.round((activePlan.progress || 0) * 100);
+      html += `
+        <div class="card" id="injectionCard">
+          <div class="card-hd"><h3>\uD83D\uDCCC 当前注入</h3></div>
+          <div id="injectionBody">
+            <div style="font-size:0.85rem;font-weight:600;">${esc(activePlan.title)}</div>
+            <div style="font-size:0.74rem;color:var(--fg2);margin-top:4px;">
+              进度 ${progressPct}% · 状态：${activePlan.status}
+              ${activeData.injection_preview ? `<div style="color:var(--fg3);font-family:var(--mono);font-size:0.7rem;margin-top:4px;white-space:pre-wrap;line-height:1.4;">${esc(activeData.injection_preview)}</div>` : ''}
+            </div>
+            <div style="margin-top:6px;">
+              <button class="btn sm" onclick="handleDeactivate()">取消注入</button>
+            </div>
+          </div>
+        </div>`;
+    } else {
+      html += `
+        <div class="card" id="injectionCard">
+          <div class="card-hd"><h3>\uD83D\uDCCC 当前注入</h3></div>
+          <div id="injectionBody">
+            <div style="font-size:0.82rem;color:var(--fg2);padding:8px 0;">
+              暂无注入的项目
+            </div>
+            <div style="font-size:0.72rem;color:var(--fg3);margin-bottom:4px;">
+              激活一个计划书后，这里会显示注入到 AI 系统提示词的内容
+            </div>
+          </div>
+        </div>`;
+    }
+    
+    html += `
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="card-hd" style="margin:0;"><h3>\uD83E\uDD16 AI 自动检测</h3></div>
+          <label class="toggle">
+            <input type="checkbox" ${settings.auto_detect_enabled ? 'checked' : ''} onchange="handleToggleAutoDetect(this.checked)">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div style="font-size:0.74rem;color:var(--fg2);margin-top:4px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+          ${settings.auto_detect_enabled
+            ? '已开启 · 阈值' +
+              '<input type="range" class="dim-slider" min="0.1" max="1.0" step="0.05" value="'+settings.auto_detect_threshold+'" oninput="handleThresholdChange(this.value)" style="width:80px;margin:0 4px;">' +
+              '<span id="thresholdVal" style="font-family:var(--mono);font-size:0.7rem;color:var(--fg);min-width:2.5em;">'+settings.auto_detect_threshold.toFixed(2)+'</span>'
+            : '已关闭'}
+        </div>
+      </div>`;
+    
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;margin-top:4px;">';
+    html += '<span style="color:var(--fg2);font-size:0.78rem;">\uD83D\uDCCB 全部计划书 ('+plans.length+')</span>';
+    html += '<button class="btn sm accent" onclick="showNewPlanModal()">+ 新建</button>';
+    html += '</div>';
+    
+    if (!plans.length) {
+      html += '<div class="card"><div class="loading">还没有计划书，点 [+ 新建] 创建第一个吧</div></div>';
+    } else {
+      for (const p of plans) {
+        const isAct = p.is_active;
+        const dot = isAct ? '\u25C9' : '\u25CB';
+        const dotColor = isAct ? 'var(--accent)' : 'var(--fg3)';
+        const progressPct = Math.round((p.progress || 0) * 100);
+        
+        html += `
+          <div class="card" style="cursor:pointer;opacity:${p.status==='archived'||p.status==='cancelled'?'0.6':'1'}" onclick="showPlanDetail(${p.id})">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="color:${dotColor};font-size:1.2rem;">${dot}</span>
+              <div style="flex:1">
+                <div style="font-weight:600;font-size:0.82rem;">${esc(p.title)}</div>
+                <div style="font-size:0.72rem;color:var(--fg2);margin-top:2px;">${esc(p.description||'')}</div>
+              </div>
+              <div style="text-align:right;font-size:0.7rem;color:var(--fg3);">
+                <div>${progressPct}%</div>
+                <div style="font-size:0.65rem;">${p.status}</div>
+              </div>
+            </div>
+            <div style="margin-top:6px;display:flex;align-items:center;gap:6px;">
+              ${!isAct ? `<button class="btn sm" onclick="event.stopPropagation();handleActivatePlan(${p.id})">激活</button>` : '<button class="btn sm" style="opacity:0.5" disabled>已激活</button>'}
+              <button class="btn sm" onclick="event.stopPropagation();showEditPlanModal(${p.id})">编辑</button>
+              <button class="btn sm" onclick="event.stopPropagation();handleDeletePlan(${p.id})" style="color:var(--red)">删除</button>
+            </div>
+          </div>`;
+      }
+    }
+    
+    html += '<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">看板 v0.1.0</span></div>';
+    
+    el.innerHTML = html;
+    
+    // 启动注入卡片轮询（每10秒刷新）
+    if(boardPollTimer)clearInterval(boardPollTimer);
+    boardPollTimer=setInterval(async()=>{
+      try{
+        const r=await api('/dashboard/plan/active');
+        const d=r.data||{};const ap=d.active_plan||null;
+        const body=document.getElementById('injectionBody');
+        if(!body)return;
+        if(ap){
+          const pct=Math.round((ap.progress||0)*100);
+          body.innerHTML=
+            '<div style="font-size:0.85rem;font-weight:600;">'+esc(ap.title)+'</div>'+
+            '<div style="font-size:0.74rem;color:var(--fg2);margin-top:4px;">进度 '+pct+'% · 状态：'+esc(ap.status)+'</div>'+
+            (d.injection_preview ? '<div style="color:var(--fg3);font-family:var(--mono);font-size:0.7rem;margin-top:4px;white-space:pre-wrap;line-height:1.4;">'+esc(d.injection_preview)+'</div>' : '')+
+            '<div style="margin-top:6px;"><button class="btn sm" onclick="handleDeactivate()">取消注入</button></div>';
+        }else{
+          body.innerHTML=
+            '<div style="font-size:0.82rem;color:var(--fg2);padding:8px 0;">暂无注入的项目</div>'+
+            '<div style="font-size:0.72rem;color:var(--fg3);margin-bottom:4px;">激活一个计划书后，这里会显示注入到 AI 系统提示词的内容</div>';
+        }
+      }catch(e){}
+    },10000);
+    
+  } catch(e) {
+    el.innerHTML = '<div class="error">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
 // ─── Module Detail Page ────
 async function renderModule(el,modId,statusData){
+  // Check if modId matches board module (by name or from registered modules list)
+  const modList=(statusData.modules||{}).registered||[];
+  const isBoard=modId==='board'||modId==='\u770B\u677F'||modList.some(m=>m.name===modId&&(m.id==='board'||m.name==='board'));
+  if (isBoard) {
+    return renderBoardModule(el, modId);
+  }
   el.innerHTML='<div class="card"><div class="card-hd"><h3>\u25C9 '+esc(modId)+'</h3></div><div class="loading">加载中...</div></div>';
   try{
     const d=await api('/dashboard/engine/'+modId);
@@ -2219,6 +2360,237 @@ function loadProfileConfig(){
     msg.textContent='✗ 刷新失败';
     msg.style.color='#f44336';
   });
+}
+
+// ─── Plan/Plans 模块 ──────────────────────
+
+// ─── New Plan Modal ────
+function showNewPlanModal() {
+  const bg = document.createElement('div');
+  bg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:999;';
+  bg.onclick = () => bg.remove();
+  bg.innerHTML = `
+    <div class="card" style="width:420px;max-width:90vw;" onclick="event.stopPropagation()">
+      <div class="card-hd"><h3>\uD83D\uDCCB 新建计划书</h3></div>
+      <div style="margin:10px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">标题 *</div>
+        <input id="newPlanTitle" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--fg);font-size:0.82rem;" placeholder="计划书名">
+      </div>
+      <div style="margin:10px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">描述</div>
+        <textarea id="newPlanDesc" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--fg);font-size:0.82rem;resize:vertical;min-height:60px;" placeholder="计划描述"></textarea>
+      </div>
+      <div style="margin:10px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">标签（逗号分隔）</div>
+        <input id="newPlanTags" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--fg);font-size:0.82rem;" placeholder="tag1, tag2">
+      </div>
+      <div style="margin:10px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">优先级 (1-5)</div>
+        <input id="newPlanPriority" type="number" min="1" max="5" value="3" style="width:60px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--fg);font-size:0.82rem;">
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button class="btn" onclick="this.closest(\'[style*=\"fixed\"]\').remove()">取消</button>
+        <button class="btn accent" onclick="createPlan()">创建</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(bg);
+}
+
+async function createPlan() {
+  const title = document.getElementById('newPlanTitle').value.trim();
+  if (!title) return;
+  const desc = document.getElementById('newPlanDesc').value.trim();
+  const tagsStr = document.getElementById('newPlanTags').value.trim();
+  const tags = tagsStr ? tagsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const priority = parseInt(document.getElementById('newPlanPriority').value) || 3;
+  await apiPost('/dashboard/plan/create', { title, description: desc, tags, priority });
+  document.querySelector('[style*="fixed"]').remove();
+  navigate('module','board');
+}
+
+// ─── Edit Plan Modal ────
+async function showEditPlanModal(planId) {
+  const res = await api(`/dashboard/plan/${planId}`);
+  if (res.status !== 'ok') return;
+  const p = res.data;
+  const bg = document.createElement('div');
+  bg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:999;';
+  bg.onclick = () => bg.remove();
+  const stepsHtml = (p.steps||[]).map((s, i) => `
+    <div style="display:flex;gap:4px;align-items:center;margin:4px 0;font-size:0.78rem;">
+      <input type="hidden" class="edit-step-id" value="${s.id}">
+      <input class="edit-step-title" value="${esc(s.title||'')}" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;color:var(--fg);font-size:0.78rem;" placeholder="步骤标题">
+      <select class="edit-step-status" style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:3px 4px;color:var(--fg);font-size:0.72rem;">
+        <option value="pending" ${s.status==='pending'?'selected':''}>pending</option>
+        <option value="in_progress" ${s.status==='in_progress'?'selected':''}>in_progress</option>
+        <option value="completed" ${s.status==='completed'?'selected':''}>completed</option>
+        <option value="blocked" ${s.status==='blocked'?'selected':''}>blocked</option>
+        <option value="skipped" ${s.status==='skipped'?'selected':''}>skipped</option>
+      </select>
+    </div>
+  `).join('');
+  bg.innerHTML = `
+    <div class="card" style="width:480px;max-width:90vw;max-height:80vh;overflow-y:auto;" onclick="event.stopPropagation()">
+      <div class="card-hd"><h3>\uD83D\uDCCB 编辑计划书</h3></div>
+      <div style="margin:6px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">标题 *</div>
+        <input id="editPlanTitle" value="${esc(p.title||'')}" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--fg);font-size:0.82rem;">
+      </div>
+      <div style="margin:6px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">描述</div>
+        <textarea id="editPlanDesc" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--fg);font-size:0.82rem;resize:vertical;min-height:50px;">${esc(p.description||'')}</textarea>
+      </div>
+      <div style="margin:6px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">标签（逗号分隔）</div>
+        <input id="editPlanTags" value="${esc((p.tags||[]).join(', '))}" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--fg);font-size:0.82rem;">
+      </div>
+      <div style="margin:6px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">优先级 (1-5)</div>
+        <input id="editPlanPriority" type="number" min="1" max="5" value="${p.priority||3}" style="width:60px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--fg);font-size:0.82rem;">
+      </div>
+      <div style="margin:6px 0;">
+        <div style="font-size:0.78rem;color:var(--fg2);margin-bottom:4px;">步骤列表</div>
+        <div id="editStepsContainer">${stepsHtml}</div>
+        <button class="btn sm" onclick="addEditStep()" style="margin-top:4px;">+ 添加步骤</button>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button class="btn" onclick="this.closest(\'[style*=\"fixed\"]\').remove()">取消</button>
+        <button class="btn accent" onclick="savePlan(${planId})">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(bg);
+}
+
+function addEditStep() {
+  const container = document.getElementById('editStepsContainer');
+  if (!container) return;
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;gap:4px;align-items:center;margin:4px 0;font-size:0.78rem;';
+  div.innerHTML = `
+    <input type="hidden" class="edit-step-id" value="0">
+    <input class="edit-step-title" value="" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:3px 6px;color:var(--fg);font-size:0.78rem;" placeholder="步骤标题">
+    <select class="edit-step-status" style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:3px 4px;color:var(--fg);font-size:0.72rem;">
+      <option value="pending">pending</option>
+      <option value="in_progress">in_progress</option>
+      <option value="completed">completed</option>
+      <option value="blocked">blocked</option>
+      <option value="skipped">skipped</option>
+    </select>
+  `;
+  container.appendChild(div);
+}
+
+async function savePlan(planId) {
+  const title = document.getElementById('editPlanTitle').value.trim();
+  if (!title) return;
+  const desc = document.getElementById('editPlanDesc').value.trim();
+  const tagsStr = document.getElementById('editPlanTags').value.trim();
+  const tags = tagsStr ? tagsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const priority = parseInt(document.getElementById('editPlanPriority').value) || 3;
+  const stepEls = document.querySelectorAll('#editStepsContainer > div');
+  const steps = [];
+  let stepIdCounter = 1;
+  stepEls.forEach(el => {
+    const idInput = el.querySelector('.edit-step-id');
+    const titleInput = el.querySelector('.edit-step-title');
+    const statusSelect = el.querySelector('.edit-step-status');
+    const stepTitle = (titleInput.value||'').trim();
+    if (!stepTitle) return;
+    let sid = parseInt(idInput.value) || 0;
+    if (!sid) { sid = stepIdCounter++; }
+    steps.push({ id: sid, title: stepTitle, description: '', status: statusSelect.value, depends_on: [], notes: '' });
+  });
+  await apiPost(`/dashboard/plan/${planId}/update`, { title, description: desc, tags, priority, steps });
+  document.querySelector('[style*="fixed"]').remove();
+  navigate('module','board');
+}
+
+// ─── Utility Functions ────
+async function handleActivatePlan(id) {
+  await apiPost(`/dashboard/plan/${id}/activate`);
+  navigate('module','board');
+}
+
+async function handleDeletePlan(id) {
+  if (!confirm('确定要删除这个计划书吗？')) return;
+  await apiPost(`/dashboard/plan/${id}/delete`);
+  navigate('module','board');
+}
+
+async function handleToggleAutoDetect(enabled) {
+  const res = await api('/dashboard/plan/settings');
+  const settings = res.data || {};
+  settings.auto_detect_enabled = enabled;
+  await apiPost('/dashboard/plan/settings', settings);
+  navigate('module','board');
+}
+
+async function handleThresholdChange(val) {
+  document.getElementById('thresholdVal').textContent = parseFloat(val).toFixed(2);
+  const res = await api('/dashboard/plan/settings');
+  const settings = res.data || {};
+  settings.auto_detect_enabled = true;
+  settings.auto_detect_threshold = parseFloat(val);
+  await apiPost('/dashboard/plan/settings', settings);
+}
+
+async function handleDeactivate() {
+  await apiPost('/dashboard/plan/deactivate');
+  navigate('module','board');
+}
+
+async function showPlanDetail(planId) {
+  const el = document.getElementById('pageContent');
+  const res = await api(`/dashboard/plan/${planId}`);
+  if (res.status !== 'ok') {
+    el.innerHTML = '<div class="error">计划书加载失败</div>';
+    return;
+  }
+  const p = res.data;
+  const progressPct = Math.round((p.progress || 0) * 100);
+  
+  let html = `
+    <div style="margin-bottom:8px;">
+      <a style="color:var(--accent);font-size:0.78rem;cursor:pointer;" onclick="navigate('module','board')">\u2190 返回计划书列表</a>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <h3 style="color:var(--accent);font-size:0.95rem;">\uD83D\uDCCB ${esc(p.title)}</h3>
+        <div style="display:flex;gap:6px;">
+          <button class="btn sm" onclick="showEditPlanModal(${p.id});event.stopPropagation()">\u270F 编辑</button>
+          ${!p.is_active ? `<button class="btn sm accent" onclick="handleActivatePlan(${p.id})">激活</button>` : '<button class="btn sm" disabled>已激活</button>'}
+        </div>
+      </div>
+      <div style="margin:6px 0;color:var(--fg2);font-size:0.78rem;">${esc(p.description||'')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0;">
+        ${(p.tags||[]).map(t => `<span style="background:var(--accent-dim);color:var(--accent);border-radius:10px;padding:1px 6px;font-size:0.68rem;">#${esc(t)}</span>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
+        <div><span style="color:var(--fg2);font-size:0.72rem;">状态</span><div style="font-size:0.78rem;">${p.status}</div></div>
+        <div><span style="color:var(--fg2);font-size:0.72rem;">优先级</span><div style="font-size:0.78rem;">P${p.priority||3}</div></div>
+        <div><span style="color:var(--fg2);font-size:0.72rem;">进度</span><div style="font-size:0.78rem;">${progressPct}%</div></div>
+      </div>
+      <div style="margin-top:6px;height:3px;background:var(--border);border-radius:2px;overflow:hidden;">
+        <div style="height:100%;width:${progressPct}%;background:var(--accent);border-radius:2px;transition:width 0.3s;"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><h3>\uD83D\uDCDD 步骤 (${(p.steps||[]).length})</h3></div>`;
+  
+  for (const step of (p.steps||[])) {
+    const mark = step.status === 'completed' ? '\u2713' : step.status === 'in_progress' ? '~' : step.status === 'blocked' ? '!' : step.status === 'skipped' ? '~' : ' ';
+    const markColor = step.status === 'completed' ? 'var(--green)' : step.status === 'in_progress' ? 'var(--yellow)' : 'var(--fg3)';
+    html += `
+      <div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--bg3);font-size:0.78rem;">
+        <span style="color:${markColor};font-weight:bold;width:16px;">[${mark}]</span>
+        <span>${esc(step.title)}</span>
+        <span style="margin-left:auto;color:var(--fg3);font-size:0.7rem;">${step.status}</span>
+      </div>`;
+  }
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 document.addEventListener('DOMContentLoaded',init);

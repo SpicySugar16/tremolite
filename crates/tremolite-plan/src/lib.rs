@@ -141,6 +141,8 @@ pub struct Plan {
     pub completed_at: Option<u64>,
     pub source: String,          // 来自哪个对话/事件
     pub priority: u8,            // 1~5，5最高
+    #[serde(default)]
+    pub is_active: bool,         // 是否为当前活跃计划书
 }
 
 impl Plan {
@@ -161,6 +163,7 @@ impl Plan {
             completed_at: None,
             source: String::new(),
             priority: 3,
+            is_active: false,
         }
     }
 
@@ -203,16 +206,44 @@ impl Plan {
 
 // ─── 计划书管理器 ──────────────────────────────
 
+/// 计划书自动检测配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanConfig {
+    #[serde(default)]
+    pub auto_detect_enabled: bool,
+    #[serde(default = "default_threshold")]
+    pub auto_detect_threshold: f64,
+    pub last_auto_switch_at: Option<u64>,
+    #[serde(default = "default_cooldown")]
+    pub auto_switch_cooldown_secs: u64,
+}
+
+fn default_threshold() -> f64 { 0.6 }
+fn default_cooldown() -> u64 { 300 }
+
+impl Default for PlanConfig {
+    fn default() -> Self {
+        Self {
+            auto_detect_enabled: false,
+            auto_detect_threshold: 0.6,
+            last_auto_switch_at: None,
+            auto_switch_cooldown_secs: 300,
+        }
+    }
+}
+
 /// 计划书管理器——透闪石的计划书系统核心
 pub struct PlanManager {
     plans: Vec<Plan>,
     storage_path: PathBuf,
     next_id: u64,
     dirty: bool,
+    pub config: PlanConfig,
+    config_path: PathBuf,
 }
 
 impl PlanManager {
-    pub fn new(storage_path: PathBuf) -> Self {
+    pub fn new(storage_path: PathBuf, config_path: PathBuf) -> Self {
         let plans = if storage_path.exists() {
             fs::read_to_string(&storage_path)
                 .ok()
@@ -223,12 +254,15 @@ impl PlanManager {
         };
 
         let next_id = plans.iter().map(|p: &Plan| p.id).max().unwrap_or(0) + 1;
+        let config = Self::load_config(&config_path);
 
         Self {
             plans,
             storage_path,
             next_id,
             dirty: false,
+            config,
+            config_path,
         }
     }
 
@@ -436,6 +470,7 @@ impl PlanManager {
         }
         let json = serde_json::to_string_pretty(&self.plans).map_err(|e| e.to_string())?;
         fs::write(&self.storage_path, json).map_err(|e| e.to_string())?;
+        self.save_config()?;
         self.dirty = false;
         Ok(())
     }
@@ -448,8 +483,130 @@ impl PlanManager {
             in_progress: self.filter_by_status(PlanStatus::InProgress).len(),
             completed: self.filter_by_status(PlanStatus::Completed).len(),
             total_steps: self.plans.iter().map(|p| p.steps.len()).sum(),
+            active: self.plans.iter().filter(|p| p.is_active).count(),
         }
     }
+
+    /// 获取当前活跃计划
+    pub fn active_plan(&self) -> Option<&Plan> {
+        self.plans.iter().find(|p| p.is_active)
+    }
+
+    /// 设定某计划为活跃（自动反激活其他）
+    pub fn set_active(&mut self, plan_id: u64) -> Result<(), String> {
+        let found = self.plans.iter().any(|p| p.id == plan_id);
+        if !found {
+            return Err(format!("plan {} not found", plan_id));
+        }
+        for p in self.plans.iter_mut() {
+            p.is_active = false;
+        }
+        if let Some(plan) = self.plans.iter_mut().find(|p| p.id == plan_id) {
+            plan.is_active = true;
+            plan.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// 取消所有活跃
+    pub fn clear_active(&mut self) {
+        let had_active = self.plans.iter().any(|p| p.is_active);
+        if !had_active { return; }
+        for p in self.plans.iter_mut() {
+            p.is_active = false;
+        }
+        self.dirty = true;
+    }
+
+    /// 检查某计划是否活跃
+    pub fn is_active(&self, plan_id: u64) -> bool {
+        self.plans.iter().any(|p| p.id == plan_id && p.is_active)
+    }
+
+    /// 删除计划书
+    pub fn delete_plan(&mut self, plan_id: u64) -> Result<(), String> {
+        let idx = self.plans.iter().position(|p| p.id == plan_id)
+            .ok_or_else(|| format!("plan {} not found", plan_id))?;
+        self.plans.remove(idx);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// 获取配置引用
+    pub fn config(&self) -> &PlanConfig {
+        &self.config
+    }
+
+    /// 更新配置
+    pub fn update_config(&mut self, config: PlanConfig) {
+        self.config = config;
+        self.dirty = true;
+    }
+
+    /// 获取全部计划书
+    pub fn all_plans(&self) -> &Vec<Plan> {
+        &self.plans
+    }
+
+    /// 开关自动检测
+    pub fn set_auto_detect(&mut self, enabled: bool) {
+        self.config.auto_detect_enabled = enabled;
+        self.dirty = true;
+    }
+
+    fn load_config(path: &PathBuf) -> PlanConfig {
+        if path.exists() {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else {
+            PlanConfig::default()
+        }
+    }
+
+    fn save_config(&self) -> Result<(), String> {
+        if let Some(parent) = self.config_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let json = serde_json::to_string_pretty(&self.config).map_err(|e| e.to_string())?;
+        fs::write(&self.config_path, json).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+/// 计算用户消息与计划书的匹配分数（0.0 ~ 1.0）
+/// 用于 AI 自动检测当前项目
+pub fn calc_match_score(plan: &Plan, message: &str) -> f64 {
+    let msg_lower = message.to_lowercase();
+    let mut score: f64 = 0.0;
+
+    let mut all_keywords: Vec<String> = plan.title.to_lowercase().split_whitespace()
+        .map(|s| s.to_string())
+        .chain(plan.description.to_lowercase().split_whitespace().map(|s| s.to_string()))
+        .chain(plan.tags.iter().flat_map(|t| t.split_whitespace().map(|s| s.to_string())))
+        .collect();
+    for step in &plan.steps {
+        all_keywords.extend(step.title.to_lowercase().split_whitespace().map(|s| s.to_string()));
+    }
+
+    for kw in &all_keywords {
+        if msg_lower.contains(&kw.to_lowercase()) && kw.len() > 1 {
+            score += 0.1;
+        }
+    }
+
+    for tag in &plan.tags {
+        if msg_lower.contains(&tag.to_lowercase()) {
+            score += 0.3;
+        }
+    }
+
+    score.min(1.0)
 }
 
 impl Drop for PlanManager {
@@ -474,6 +631,7 @@ pub struct PlanStats {
     pub in_progress: usize,
     pub completed: usize,
     pub total_steps: usize,
+    pub active: usize,
 }
 
 // ─── 单元测试 ─────────────────────────────────
@@ -481,22 +639,30 @@ pub struct PlanStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn test_config_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("tremolite-plan-config-{}.json", name))
+    }
 
     #[test]
     fn test_plan_lifecycle() {
-        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test.json"));
+        let cfg = test_config_path("lifecycle");
+        let _ = std::fs::remove_file(&cfg);
+        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test.json"), cfg);
         let id = pm.create_plan("测试透闪石", "测试计划书生命周期");
         assert!(pm.transition_status(id, PlanStatus::Reviewing).is_ok());
         assert!(pm.transition_status(id, PlanStatus::Approved).is_ok());
         assert!(pm.transition_status(id, PlanStatus::InProgress).is_ok());
         assert!(pm.transition_status(id, PlanStatus::Completed).is_ok());
-        // 不能从已完成跳回草稿
         assert!(pm.transition_status(id, PlanStatus::Draft).is_err());
     }
 
     #[test]
     fn test_plan_steps() {
-        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test2.json"));
+        let cfg = test_config_path("steps");
+        let _ = std::fs::remove_file(&cfg);
+        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test2.json"), cfg);
         let id = pm.create_plan("搭建记忆系统", "完成五层缓存记忆");
         let plan = pm.get_plan_mut(id).unwrap();
         let step1 = PlanStep::new(1, "设计数据结构", "定义MemoryEntry和层级");
@@ -510,7 +676,9 @@ mod tests {
 
     #[test]
     fn test_generate_handbook() {
-        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test3.json"));
+        let cfg = test_config_path("handbook");
+        let _ = std::fs::remove_file(&cfg);
+        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test3.json"), cfg);
         let id = pm.create_plan("情绪引擎", "八维情绪向量");
         {
             let plan = pm.get_plan_mut(id).unwrap();
@@ -527,9 +695,11 @@ mod tests {
 
     #[test]
     fn test_search() {
+        let cfg = test_config_path("search");
+        let _ = std::fs::remove_file(&cfg);
         let path = std::env::temp_dir().join("tremolite-plan-test4.json");
         let _ = std::fs::remove_file(&path);
-        let mut pm = PlanManager::new(path);
+        let mut pm = PlanManager::new(path, cfg);
         pm.create_plan("情绪引擎", "八维情绪向量检测");
         pm.create_plan("记忆系统", "五层缓存记忆");
         let results = pm.search("情绪");
@@ -538,7 +708,9 @@ mod tests {
 
     #[test]
     fn test_progress() {
-        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test5.json"));
+        let cfg = test_config_path("progress");
+        let _ = std::fs::remove_file(&cfg);
+        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test5.json"), cfg);
         let id = pm.create_plan("测试进度", "测试进度计算");
         {
             let plan = pm.get_plan_mut(id).unwrap();
@@ -550,5 +722,55 @@ mod tests {
         }
         let plan = pm.get_plan(id).unwrap();
         assert!((plan.progress() - 0.333).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_active_plan() {
+        let cfg = test_config_path("active");
+        let _ = std::fs::remove_file(&cfg);
+        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test6.json"), cfg);
+        let id1 = pm.create_plan("计划A", "测试活跃");
+        let id2 = pm.create_plan("计划B", "测试活跃");
+        assert!(pm.active_plan().is_none());
+        pm.set_active(id1).unwrap();
+        assert_eq!(pm.active_plan().unwrap().id, id1);
+        assert!(pm.is_active(id1));
+        assert!(!pm.is_active(id2));
+        pm.set_active(id2).unwrap();
+        assert_eq!(pm.active_plan().unwrap().id, id2);
+        assert!(!pm.is_active(id1));
+        assert!(pm.is_active(id2));
+        pm.clear_active();
+        assert!(pm.active_plan().is_none());
+    }
+
+    #[test]
+    fn test_delete_active_plan() {
+        let cfg = test_config_path("delete_active");
+        let _ = std::fs::remove_file(&cfg);
+        let mut pm = PlanManager::new(PathBuf::from("/tmp/tremolite-plan-test7.json"), cfg);
+        let id = pm.create_plan("待删除", "删除测试");
+        pm.set_active(id).unwrap();
+        assert!(pm.is_active(id));
+        pm.delete_plan(id).unwrap();
+        assert!(pm.active_plan().is_none());
+        assert!(pm.get_plan(id).is_none());
+    }
+
+    #[test]
+    fn test_calc_match_score() {
+        let mut plan = Plan::new(1, "情绪引擎", "八维情绪向量检测");
+        plan.tags.push("emotion".to_string());
+        plan.tags.push("八维".to_string());
+        let step = PlanStep::new(1, "关键词检测模块", "实现detect_from_text");
+        plan.add_step(step);
+
+        // "情绪引擎" (0.1) + "八维" from tag (0.3) + "检测" from step description? No, step desc is "实现detect_from_text"
+        // Actually: "情绪引擎" keyword match (0.1) + "八维" tag match (0.3) = 0.4
+        let score_match = calc_match_score(&plan, "今天我们来开发情绪引擎 用八维方法");
+        assert!(score_match > 0.3, "score was {}", score_match);
+
+        let score_no_match = calc_match_score(&plan, "今天天气真好");
+        assert!(score_no_match < 0.3);
     }
 }

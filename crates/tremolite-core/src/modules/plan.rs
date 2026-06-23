@@ -13,7 +13,10 @@ pub struct KanbanModule {
 
 impl KanbanModule {
     pub fn new(data_dir: PathBuf) -> Self {
-        let mgr = PlanManager::new(data_dir.join("plan").join("plans.json"));
+        let mgr = PlanManager::new(
+            data_dir.join("plan").join("plans.json"),
+            data_dir.join("plan").join("plans_config.json"),
+        );
         Self { mgr }
     }
 
@@ -27,7 +30,12 @@ impl Module for KanbanModule {
     fn version(&self) -> &str { "0.2.0" }
 
     fn provides(&self) -> Vec<Capability> {
-        vec!["board.create".into(), "board.track".into(), "board.complete".into()]
+        vec![
+            "board.create".into(),
+            "board.track".into(),
+            "board.complete".into(),
+            "board.activate".into(),
+        ]
     }
 
     fn requires(&self) -> Vec<Capability> { vec![] }
@@ -111,6 +119,54 @@ impl Module for KanbanModule {
                             },
                         },
                         "required": ["plan_id", "target_status"]
+                    }),
+                },
+            },
+            ToolDefinition {
+                def_type: "function".into(),
+                function: ToolFunction {
+                    name: "board_activate".into(),
+                    description: "将某个计划书设为活跃（同时反激活其他所有计划书）".into(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "plan_id": { "type": "integer", "description": "计划书 ID" },
+                        },
+                        "required": ["plan_id"]
+                    }),
+                },
+            },
+            ToolDefinition {
+                def_type: "function".into(),
+                function: ToolFunction {
+                    name: "board_deactivate".into(),
+                    description: "取消当前活跃计划书，不再注入任何计划书信息".into(),
+                    parameters: serde_json::json!({
+                        "type": "object", "properties": {}, "required": []
+                    }),
+                },
+            },
+            ToolDefinition {
+                def_type: "function".into(),
+                function: ToolFunction {
+                    name: "board_active".into(),
+                    description: "查看当前活跃的计划书及其进度".into(),
+                    parameters: serde_json::json!({
+                        "type": "object", "properties": {}, "required": []
+                    }),
+                },
+            },
+            ToolDefinition {
+                def_type: "function".into(),
+                function: ToolFunction {
+                    name: "board_delete".into(),
+                    description: "删除一个计划书（所有数据将丢失）".into(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "plan_id": { "type": "integer", "description": "计划书 ID" },
+                        },
+                        "required": ["plan_id"]
                     }),
                 },
             },
@@ -223,6 +279,57 @@ impl Module for KanbanModule {
                 }
                 Ok(output)
             }
+            "board_activate" => {
+                let parsed: HashMap<String, String> = serde_json::from_str(args)
+                    .map_err(|e| ModuleError::ToolExecutionFailed(e.to_string()))?;
+                let plan_id: u64 = parsed.get("plan_id")
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| ModuleError::ToolExecutionFailed("缺少有效 plan_id".into()))?;
+                self.mgr.set_active(plan_id)
+                    .map_err(|e| ModuleError::ToolExecutionFailed(e))?;
+                let title = self.mgr.get_plan(plan_id)
+                    .map(|p| &p.title)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                Ok(format!("计划书 [#{}] {} 已设为活跃 💕", plan_id, title))
+            }
+            "board_deactivate" => {
+                self.mgr.clear_active();
+                Ok("已取消所有活跃计划书 💕".into())
+            }
+            "board_active" => {
+                match self.mgr.active_plan() {
+                    Some(plan) => {
+                        let progress = (plan.progress() * 100.0) as u8;
+                        let total_steps = plan.steps.len();
+                        let done_steps = plan.steps.iter()
+                            .filter(|s| s.status == tremolite_plan::StepStatus::Completed)
+                            .count();
+                        let tags = if plan.tags.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\n标签：{}", plan.tags.join(", "))
+                        };
+                        Ok(format!(
+                            "当前活跃计划书 [#{}]\n标题：{}\n描述：{}\n状态：{}\n进度：{}% ({}/{})\n优先级：{}{} 💕",
+                            plan.id, plan.title, plan.description,
+                            plan.status.as_str(), progress, done_steps, total_steps,
+                            plan.priority, tags,
+                        ))
+                    }
+                    None => Ok("暂无活跃计划书 💕".into()),
+                }
+            }
+            "board_delete" => {
+                let parsed: HashMap<String, String> = serde_json::from_str(args)
+                    .map_err(|e| ModuleError::ToolExecutionFailed(e.to_string()))?;
+                let plan_id: u64 = parsed.get("plan_id")
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| ModuleError::ToolExecutionFailed("缺少有效 plan_id".into()))?;
+                self.mgr.delete_plan(plan_id)
+                    .map_err(|e| ModuleError::ToolExecutionFailed(e))?;
+                Ok(format!("计划书 [#{}] 已删除 💕", plan_id))
+            }
             "board_move" => {
                 let parsed: HashMap<String, String> = serde_json::from_str(args)
                     .map_err(|e| ModuleError::ToolExecutionFailed(e.to_string()))?;
@@ -256,36 +363,127 @@ impl Module for KanbanModule {
     }
 
     fn on_event(&mut self, event: &Event, _ctx: &EventContext) -> Result<EventResponse, ModuleError> {
-        if let Event::Startup = event {
-            let exists = true;
-            if !exists {
-                let id = self.mgr.create_plan(
-                    "透闪石开发 Phase 3~6",
-                    "五层记忆、注意力、计划书系统、技能系统",
-                );
-                {
-                    let plan = match self.mgr.get_plan_mut(id) {
-                        Some(p) => p,
-                        None => return Ok(EventResponse::Pass),
+        match event {
+            Event::Startup => {
+                let exists = true;
+                if !exists {
+                    let id = self.mgr.create_plan(
+                        "透闪石开发 Phase 3~6",
+                        "五层记忆、注意力、计划书系统、技能系统",
+                    );
+                    {
+                        let plan = match self.mgr.get_plan_mut(id) {
+                            Some(p) => p,
+                            None => return Ok(EventResponse::Pass),
+                        };
+                        for (i, (title, desc)) in [
+                            ("五层缓存记忆", "L1~Disk全实现"),
+                            ("多尺度注意力", "四层zoom"),
+                            ("计划书系统", "生命周期+checklist"),
+                            ("学习引擎", "三层技能体系"),
+                        ].iter().enumerate() {
+                            let mut s = PlanStep::new((i + 1) as u64, title, desc);
+                            s.status = tremolite_plan::StepStatus::Completed;
+                            plan.add_step(s);
+                        }
+                    }
+                    let _ = self.mgr.transition_status(id, PlanStatus::Completed);
+                }
+                Ok(EventResponse::Pass)
+            }
+            Event::Shutdown => {
+                let _ = self.mgr.flush();
+                Ok(EventResponse::Pass)
+            }
+            Event::OnMessage { input, channel: _ } => {
+                if self.mgr.config.auto_detect_enabled {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+
+                    let cooled = match self.mgr.config.last_auto_switch_at {
+                        Some(last) => now >= last + self.mgr.config.auto_switch_cooldown_secs,
+                        None => true,
                     };
-                    for (i, (title, desc)) in [
-                        ("五层缓存记忆", "L1~Disk全实现"),
-                        ("多尺度注意力", "四层zoom"),
-                        ("计划书系统", "生命周期+checklist"),
-                        ("学习引擎", "三层技能体系"),
-                    ].iter().enumerate() {
-                        let mut s = PlanStep::new((i + 1) as u64, title, desc);
-                        s.status = tremolite_plan::StepStatus::Completed;
-                        plan.add_step(s);
+
+                    if cooled {
+                        let current_active = self.mgr.active_plan();
+                        let plans = self.mgr.all_plans().clone();
+
+                        let mut best_score = 0.0;
+                        let mut best_id = None;
+
+                        for plan in &plans {
+                            let score = tremolite_plan::calc_match_score(plan, input);
+                            if score > best_score {
+                                best_score = score;
+                                best_id = Some(plan.id);
+                            }
+                        }
+
+                        let current_score = current_active
+                            .map(|p| tremolite_plan::calc_match_score(p, input))
+                            .unwrap_or(0.0);
+
+                        if let Some(id) = best_id {
+                            if best_score >= self.mgr.config.auto_detect_threshold
+                                && best_score > current_score + 0.1
+                                && !self.mgr.is_active(id)
+                            {
+                                let _ = self.mgr.set_active(id);
+                                self.mgr.config.last_auto_switch_at = Some(now);
+                                self.mgr.update_config(self.mgr.config.clone());
+                            }
+                        }
                     }
                 }
-                let _ = self.mgr.transition_status(id, PlanStatus::Completed);
+                Ok(EventResponse::Pass)
             }
+            Event::BuildPrompt => {
+                if let Some(plan) = self.mgr.active_plan() {
+                    let progress = (plan.progress() * 100.0) as u8;
+                    let steps_total = plan.steps.len();
+                    let steps_done = plan.steps.iter()
+                        .filter(|s| s.status == tremolite_plan::StepStatus::Completed)
+                        .count();
+                    let current_step = plan.steps.iter()
+                        .find(|s| s.status == tremolite_plan::StepStatus::InProgress)
+                        .or_else(|| plan.next_executable_step())
+                        .map(|s| s.title.as_str())
+                        .unwrap_or("");
+                    let tags_hint = if plan.tags.is_empty() {
+                        String::new()
+                    } else {
+                        format!("标签：{}", plan.tags.join("，"))
+                    };
+                    let step_hint = if !current_step.is_empty() {
+                        format!("下一步：{}", current_step)
+                    } else if steps_done == steps_total && steps_total > 0 {
+                        "所有步骤已完结".to_string()
+                    } else {
+                        String::new()
+                    };
+                    let tool_hint = "可用：board_view 看全貌 · board_complete_step 标记完成 · board_add_step 加新步骤 · board_activate 切换项目";
+
+                    let injection = format!(
+                        "[项目] {}：{}\n进度 {}% ({}/{}) · 优先级 P{}\n{}\n{}\n{}",
+                        plan.title, plan.description,
+                        progress, steps_done, steps_total, plan.priority,
+                        step_hint,
+                        tags_hint,
+                        tool_hint,
+                    );
+
+                    let mut data = HashMap::new();
+                    data.insert("plan_injection".to_string(), Box::new(injection) as Box<dyn Any + Send>);
+                    Ok(EventResponse::Modified { data })
+                } else {
+                    Ok(EventResponse::Pass)
+                }
+            }
+            _ => Ok(EventResponse::Pass),
         }
-        if let Event::Shutdown = event {
-            let _ = self.mgr.flush();
-        }
-        Ok(EventResponse::Pass)
     }
 
     fn as_any(&self) -> Option<&dyn Any> { Some(self) }

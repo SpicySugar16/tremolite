@@ -157,6 +157,16 @@ async fn run_server_inner(
         .route("/dashboard/config/check", get(handle_config_check))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
+        .route("/dashboard/plan", get(handle_plan_list))
+        .route("/dashboard/plan/active", get(handle_plan_active))
+        .route("/dashboard/plan/deactivate", post(handle_plan_deactivate))
+        .route("/dashboard/plan/settings", get(handle_plan_settings_get))
+        .route("/dashboard/plan/settings", post(handle_plan_settings_set))
+        .route("/dashboard/plan/create", post(handle_plan_create))
+        .route("/dashboard/plan/{id}", get(handle_plan_get))
+        .route("/dashboard/plan/{id}/update", post(handle_plan_update))
+        .route("/dashboard/plan/{id}/delete", post(handle_plan_delete))
+        .route("/dashboard/plan/{id}/activate", post(handle_plan_activate))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -516,6 +526,57 @@ async fn handle_dashboard() -> impl IntoResponse {
 
 const EMOTION_PATH: &str = "/home/spicysugar/.tremolite/data/emotion.json";
 
+// ─── Plan 数据路径常量 ──────────────────────────
+const PLAN_DIR: &str = ".tremolite/data/tremolite/plan";
+const PLANS_FILE: &str = "plans.json";
+const PLANS_CONFIG_FILE: &str = "plans_config.json";
+
+fn plan_dir(home: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(home).join(PLAN_DIR)
+}
+fn plans_path(home: &str) -> std::path::PathBuf {
+    plan_dir(home).join(PLANS_FILE)
+}
+fn plans_config_path(home: &str) -> std::path::PathBuf {
+    plan_dir(home).join(PLANS_CONFIG_FILE)
+}
+fn read_plans(home: &str) -> Vec<serde_json::Value> {
+    let path = plans_path(home);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+fn write_plans(home: &str, plans: &Vec<serde_json::Value>) {
+    let dir = plan_dir(home);
+    std::fs::create_dir_all(&dir).ok();
+    std::fs::write(plans_path(home), serde_json::to_string_pretty(plans).unwrap()).ok();
+}
+fn read_plan_config(home: &str) -> serde_json::Value {
+    let path = plans_config_path(home);
+    if path.exists() {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        serde_json::json!({
+            "auto_detect_enabled": false,
+            "auto_detect_threshold": 0.6,
+            "auto_switch_cooldown_secs": 300
+        })
+    }
+}
+fn write_plan_config(home: &str, config: &serde_json::Value) {
+    let dir = plan_dir(home);
+    std::fs::create_dir_all(&dir).ok();
+    std::fs::write(plans_config_path(home), serde_json::to_string_pretty(config).unwrap()).ok();
+}
+
 async fn handle_dashboard_status(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Json<Value> {
@@ -792,7 +853,7 @@ async fn handle_engine_mod(
                 "活跃任务": active,
                 "任务列表": tasks,
                 "存储路径": cron_path.to_string_lossy(),
-                "版本": "0.3.0",
+                "版本": "0.4.0",
             })
         }
         "memory" => {
@@ -1196,8 +1257,75 @@ async fn handle_engine_mod(
                 "阈值描述": threshold_desc,
                 "自动压缩": auto_compress,
                 "状态": "运行中",
-                "版本": "0.2.1",
+                "版本": "0.3.0",
                 "配置来源": config_path.to_string_lossy().to_string(),
+            })
+        },
+        "board" => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let tremolite_dir = std::path::Path::new(&home).join(".tremolite");
+            let plan_path = tremolite_dir.join("profiles").join(&state.profile_name).join("data").join("plan").join("plans.json");
+
+            let mut total = 0u64;
+            let mut draft = 0u64;
+            let mut in_progress = 0u64;
+            let mut completed = 0u64;
+            let mut cancelled = 0u64;
+            let mut plan_list: Vec<serde_json::Value> = Vec::new();
+
+            if let Ok(content) = std::fs::read_to_string(&plan_path) {
+                if let Ok(plans) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                    total = plans.len() as u64;
+                    for p in &plans {
+                        let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                        let steps = p.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+                        let done_steps = p.get("steps").and_then(|v| v.as_array()).map(|a| {
+                            a.iter().filter(|s| s.get("status").and_then(|x| x.as_str()) == Some("Completed")).count()
+                        }).unwrap_or(0);
+                        let progress = if steps > 0 { done_steps as f64 / steps as f64 } else { 0.0 };
+
+                        match status {
+                            "Draft" => draft += 1,
+                            "InProgress" | "Approved" | "Reviewing" => in_progress += 1,
+                            "Completed" => completed += 1,
+                            "Cancelled" | "Archived" => cancelled += 1,
+                            _ => {}
+                        }
+
+                        plan_list.push(serde_json::json!({
+                            "id": p.get("id"),
+                            "title": p.get("title"),
+                            "description": p.get("description"),
+                            "status": status,
+                            "priority": p.get("priority").and_then(|v| v.as_u64()).unwrap_or(3),
+                            "steps": steps,
+                            "done_steps": done_steps,
+                            "progress": (progress * 100.0).round() as u64,
+                            "created_at": p.get("created_at"),
+                            "updated_at": p.get("updated_at"),
+                            "tags": p.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+                        }));
+                    }
+                }
+            }
+
+            plan_list.sort_by(|a, b| {
+                let pa = a.get("priority").and_then(|v| v.as_u64()).unwrap_or(0);
+                let pb = b.get("priority").and_then(|v| v.as_u64()).unwrap_or(0);
+                pb.cmp(&pa)
+            });
+
+            serde_json::json!({
+                "stats": {
+                    "total": total,
+                    "draft": draft,
+                    "in_progress": in_progress,
+                    "completed": completed,
+                    "cancelled": cancelled,
+                },
+                "plans": plan_list,
+                "storage_path": plan_path.to_string_lossy().to_string(),
+                "version": "0.2.0",
             })
         },
         "delegation" => serde_json::json!({
@@ -2248,6 +2376,287 @@ async fn handle_avatar_serve(
         }
         Err(_) => Err((axum::http::StatusCode::NOT_FOUND, "not found")),
     }
+}
+
+// ─── Plan Handlers ──────────────────────────────
+
+async fn handle_plan_list(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let plans = read_plans(&home);
+    let mut data: Vec<serde_json::Value> = Vec::new();
+    for p in &plans {
+        let steps = p.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+        let steps_done = p.get("steps").and_then(|v| v.as_array()).map(|a| {
+            a.iter().filter(|s| s.get("status").and_then(|x| x.as_str()) == Some("completed")).count()
+        }).unwrap_or(0);
+        let progress = if steps > 0 { steps_done as f64 / steps as f64 } else { 0.0 };
+        data.push(serde_json::json!({
+            "id": p.get("id"),
+            "title": p.get("title"),
+            "description": p.get("description"),
+            "status": p.get("status"),
+            "progress": (progress * 100.0).round() / 100.0,
+            "is_active": p.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false),
+            "priority": p.get("priority").and_then(|v| v.as_u64()).unwrap_or(3),
+            "tags": p.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default(),
+            "steps_total": steps,
+            "steps_done": steps_done,
+            "created_at": p.get("created_at"),
+        }));
+    }
+    Json(serde_json::json!({"status": "ok", "data": data}))
+}
+
+async fn handle_plan_get(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::extract::Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let plans = read_plans(&home);
+    let plan_id: u64 = id.parse().unwrap_or(0);
+    let plan = plans.iter().find(|p| p.get("id").and_then(|v| v.as_u64()).unwrap_or(0) == plan_id);
+    match plan {
+        Some(p) => {
+            let steps = p.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let steps_done = p.get("steps").and_then(|v| v.as_array()).map(|a| {
+                a.iter().filter(|s| s.get("status").and_then(|x| x.as_str()) == Some("completed")).count()
+            }).unwrap_or(0);
+            let progress = if steps > 0 { steps_done as f64 / steps as f64 } else { 0.0 };
+            let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let progress_pct = (progress * 100.0).round() as u64;
+            let inject_preview = if p.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false) {
+                format!("当前活跃项目：{} · 进度 {}% · 状态：{}", title, progress_pct, status)
+            } else {
+                String::new()
+            };
+            let mut data = p.clone();
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("progress".into(), serde_json::json!((progress * 100.0).round() / 100.0));
+                obj.insert("steps_done".into(), serde_json::json!(steps_done));
+                obj.insert("inject_preview".into(), serde_json::json!(inject_preview));
+            }
+            Json(serde_json::json!({"status": "ok", "data": data}))
+        }
+        None => Json(serde_json::json!({"status": "error", "error": "plan not found"})),
+    }
+}
+
+async fn handle_plan_create(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut plans = read_plans(&home);
+    let next_id = plans.iter().map(|p| p.get("id").and_then(|v| v.as_u64()).unwrap_or(0)).max().unwrap_or(0) + 1;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("未命名");
+    let description = payload.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let tags = payload.get("tags").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let priority = payload.get("priority").and_then(|v| v.as_u64()).unwrap_or(3);
+    let plan = serde_json::json!({
+        "id": next_id,
+        "title": title,
+        "description": description,
+        "status": "draft",
+        "steps": [],
+        "tags": tags,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": null,
+        "source": "",
+        "priority": priority,
+        "is_active": false,
+    });
+    plans.push(plan);
+    write_plans(&home, &plans);
+    Json(serde_json::json!({"status": "ok", "id": next_id}))
+}
+
+async fn handle_plan_update(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::extract::Path(id): Path<String>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut plans = read_plans(&home);
+    let plan_id: u64 = id.parse().unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    match plans.iter_mut().find(|p| p.get("id").and_then(|v| v.as_u64()).unwrap_or(0) == plan_id) {
+        Some(plan) => {
+            if let Some(obj) = plan.as_object_mut() {
+                if let Some(title) = payload.get("title").and_then(|v| v.as_str()) {
+                    obj.insert("title".into(), serde_json::json!(title));
+                }
+                if let Some(desc) = payload.get("description").and_then(|v| v.as_str()) {
+                    obj.insert("description".into(), serde_json::json!(desc));
+                }
+                if let Some(tags) = payload.get("tags").and_then(|v| v.as_array()) {
+                    obj.insert("tags".into(), serde_json::json!(tags));
+                }
+                if let Some(priority) = payload.get("priority").and_then(|v| v.as_u64()) {
+                    obj.insert("priority".into(), serde_json::json!(priority));
+                }
+                if let Some(steps) = payload.get("steps").and_then(|v| v.as_array()) {
+                    obj.insert("steps".into(), serde_json::json!(steps));
+                }
+                obj.insert("updated_at".into(), serde_json::json!(now));
+            }
+            write_plans(&home, &plans);
+            Json(serde_json::json!({"status": "ok"}))
+        }
+        None => Json(serde_json::json!({"status": "error", "error": "plan not found"})),
+    }
+}
+
+async fn handle_plan_delete(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::extract::Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut plans = read_plans(&home);
+    let plan_id: u64 = id.parse().unwrap_or(0);
+    plans.retain(|p| p.get("id").and_then(|v| v.as_u64()).unwrap_or(0) != plan_id);
+    write_plans(&home, &plans);
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn handle_plan_activate(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::extract::Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut plans = read_plans(&home);
+    let plan_id: u64 = id.parse().unwrap_or(0);
+    for p in plans.iter_mut() {
+        if let Some(obj) = p.as_object_mut() {
+            obj.insert("is_active".into(), serde_json::json!(false));
+        }
+    }
+    if let Some(plan) = plans.iter_mut().find(|p| p.get("id").and_then(|v| v.as_u64()).unwrap_or(0) == plan_id) {
+        if let Some(obj) = plan.as_object_mut() {
+            obj.insert("is_active".into(), serde_json::json!(true));
+        }
+    }
+    write_plans(&home, &plans);
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn handle_plan_deactivate(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut plans = read_plans(&home);
+    for p in plans.iter_mut() {
+        if let Some(obj) = p.as_object_mut() {
+            obj.insert("is_active".into(), serde_json::json!(false));
+        }
+    }
+    write_plans(&home, &plans);
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn handle_plan_active(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let plans = read_plans(&home);
+    let config = read_plan_config(&home);
+    let active_plan = plans.iter().find(|p| p.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false));
+    let data = match active_plan {
+        Some(p) => {
+            let steps = p.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let steps_done = p.get("steps").and_then(|v| v.as_array()).map(|a| {
+                a.iter().filter(|s| s.get("status").and_then(|x| x.as_str()) == Some("completed")).count()
+            }).unwrap_or(0);
+            let progress = if steps > 0 { steps_done as f64 / steps as f64 } else { 0.0 };
+            let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let progress_pct = (progress * 100.0).round() as u64;
+            let injection_preview = {
+                let desc = p.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let priority = p.get("priority").and_then(|v| v.as_u64()).unwrap_or(3);
+                let tags = p.get("tags").and_then(|v| v.as_array()).map(|a| {
+                    a.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(", ")
+                }).filter(|s| !s.is_empty()).map(|s| format!("标签：{}", s)).unwrap_or_default();
+                let current_step = p.get("steps").and_then(|v| v.as_array()).map(|steps| {
+                    steps.iter().find(|s| s.get("status").and_then(|x| x.as_str()) == Some("in_progress"))
+                        .or_else(|| steps.iter().find(|s| s.get("status").and_then(|x| x.as_str()) == Some("pending")))
+                        .and_then(|s| s.get("title").and_then(|t| t.as_str()))
+                }).flatten().unwrap_or("");
+                let step_hint = if !current_step.is_empty() {
+                    format!("下一步：{}", current_step)
+                } else if steps > 0 && steps_done == steps {
+                    "所有步骤已完结".to_string()
+                } else {
+                    String::new()
+                };
+                format!(
+                    "[项目] {}：{}\n进度 {}% ({}/{}) · 优先级 P{}\n{}\n{}\n可用：board_view 看全貌 · board_complete_step 标记完成 · board_add_step 加新步骤 · board_activate 切换项目",
+                    title, desc, progress_pct, steps_done, steps, priority, step_hint, tags,
+                )
+            };
+            let mut plan_data = p.clone();
+            if let Some(obj) = plan_data.as_object_mut() {
+                obj.insert("progress".into(), serde_json::json!((progress * 100.0).round() / 100.0));
+                obj.insert("steps_done".into(), serde_json::json!(steps_done));
+            }
+            serde_json::json!({
+                "active_plan": plan_data,
+                "injection_preview": injection_preview,
+                "auto_detect": {
+                    "enabled": config.get("auto_detect_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+                    "threshold": config.get("auto_detect_threshold").and_then(|v| v.as_f64()).unwrap_or(0.6),
+                }
+            })
+        }
+        None => serde_json::json!({
+            "active_plan": null,
+            "injection_preview": "",
+            "auto_detect": {
+                "enabled": config.get("auto_detect_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+                "threshold": config.get("auto_detect_threshold").and_then(|v| v.as_f64()).unwrap_or(0.6),
+            }
+        }),
+    };
+    Json(serde_json::json!({"status": "ok", "data": data}))
+}
+
+async fn handle_plan_settings_get(
+    Extension(_state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config = read_plan_config(&home);
+    Json(serde_json::json!({
+        "status": "ok",
+        "data": {
+            "auto_detect_enabled": config.get("auto_detect_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+            "auto_detect_threshold": config.get("auto_detect_threshold").and_then(|v| v.as_f64()).unwrap_or(0.6),
+            "auto_switch_cooldown_secs": config.get("auto_switch_cooldown_secs").and_then(|v| v.as_u64()).unwrap_or(300),
+        }
+    }))
+}
+
+async fn handle_plan_settings_set(
+    Extension(_state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config = serde_json::json!({
+        "auto_detect_enabled": payload.get("auto_detect_enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+        "auto_detect_threshold": payload.get("auto_detect_threshold").and_then(|v| v.as_f64()).unwrap_or(0.6),
+        "auto_switch_cooldown_secs": payload.get("auto_switch_cooldown_secs").and_then(|v| v.as_u64()).unwrap_or(300),
+    });
+    write_plan_config(&home, &config);
+    Json(serde_json::json!({"status": "ok"}))
 }
 
 async fn handle_config_check() -> Json<serde_json::Value> {
