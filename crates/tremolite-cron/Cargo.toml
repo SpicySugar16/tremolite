@@ -1,6 +1,6 @@
 [package]
 name = "tremolite-cron"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "定时任务调度器 — 支持 Shell 和 LLM Prompt 两种 action"
 

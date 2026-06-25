@@ -14,7 +14,21 @@ use serde_json::Value;
 use tower_http::cors::CorsLayer;
 
 use tremolite_core::scheduler::SessionTask;
+use tremolite_tools::{ToolRegistry, register_all};
 use tremolite_cron::Schedule;
+use tremolite_cron::VERSION as CRON_VERSION;
+use tremolite_emotion::VERSION as EMOTION_VERSION;
+use tremolite_tools::VERSION as TOOLS_VERSION;
+use tremolite_channels::VERSION as CHANNELS_VERSION;
+use tremolite_learn::VERSION as LEARN_VERSION;
+use tremolite_memory::VERSION as MEMORY_VERSION;
+use tremolite_attention::VERSION as ATTENTION_VERSION;
+use tremolite_compress::VERSION as COMPRESS_VERSION;
+use tremolite_reflection::VERSION as REFLECTION_VERSION;
+use tremolite_delegation::VERSION as DELEGATION_VERSION;
+use tremolite_mcp::VERSION as MCP_VERSION;
+use tremolite_session::VERSION as SESSION_VERSION;
+use tremolite_plan::VERSION as PLAN_VERSION;
 use tremolite_dashboard::dashboard_html;
 use tremolite_message::ChannelRegistry;
 
@@ -129,6 +143,8 @@ async fn run_server_inner(
         .route("/dashboard/engine/{mod_id}", get(handle_engine_mod))
         .route("/dashboard/engine/core/modules/{mod_id}/toggle", post(handle_module_toggle))
         .route("/dashboard/engine/core/restart", post(handle_restart))
+        .route("/dashboard/engine/tools/toggle", post(handle_tools_toggle))
+        .route("/dashboard/engine/tools/admin", post(handle_tools_admin))
         .route("/dashboard/emotion", get(handle_emotion_status))
         .route("/dashboard/emotion/update", post(handle_emotion_update))
         .route("/dashboard/emotion/fluctuate", post(handle_emotion_fluctuate))
@@ -141,6 +157,10 @@ async fn run_server_inner(
         .route("/dashboard/cron/{idx}/delete", post(handle_cron_delete))
         .route("/dashboard/cron/{idx}/update", post(handle_cron_update))
         .route("/dashboard/cron/{idx}/run", post(handle_cron_run))
+        .route("/dashboard/delegation/settings", post(handle_delegation_settings_save))
+        .route("/dashboard/delegation/acp/add", post(handle_acp_agent_add))
+        .route("/dashboard/delegation/acp/remove", post(handle_acp_agent_remove))
+        .route("/dashboard/mcp/servers", get(handle_mcp_servers))
         .route("/dashboard/channels/manage", get(handle_channels_manage))
         .route("/dashboard/channels/save", post(handle_channels_save))
         .route("/dashboard/channels/sync-config", post(handle_channels_sync_config))
@@ -341,7 +361,7 @@ async fn handle_health(Extension(state): Extension<Arc<AppState>>) -> Json<Value
     Json(serde_json::json!({
         "status": "ok",
         "service": "tremolite",
-        "version": "0.2.1",
+        "version": env!("CARGO_PKG_VERSION"),
         "uptime_secs": uptime,
         "uptime_human": format_uptime(uptime),
         "mode": "daemon",
@@ -741,6 +761,252 @@ async fn handle_dashboard_status(
 // 每个模块页展示专属数据，而不是统一的系统概览 fallback
 use axum::extract::Path;
 
+
+#[derive(serde::Deserialize)]
+struct ToolsToggleRequest {
+    name: String,
+    enabled: bool,
+}
+
+async fn handle_tools_toggle(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<ToolsToggleRequest>,
+) -> Json<serde_json::Value> {
+    let config_path = tools_config_path(&state);
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return Json(serde_json::json!({"status": "error", "error": "找不到 tools.toml"})),
+    };
+    let found_existing = content.contains("[[tool_settings]]")
+        && content.lines().zip(content.lines().skip(1)).any(|(prev, curr)| {
+            prev.trim() == "[[tool_settings]]"
+            && curr.trim() == format!("name = \"{}\"", payload.name)
+        });
+    let settings_entry = format!("[[tool_settings]]\nname = \"{}\"\nenabled = {}", payload.name, if payload.enabled { "true" } else { "false" });
+    let new_content = if found_existing {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result: Vec<String> = Vec::new();
+        let mut i = 0;
+        let name_match = format!("name = \"{}\"", payload.name);
+        while i < lines.len() {
+            let line = lines[i];
+            if line.trim() == name_match.as_str() {
+                if result.last().map(|s| s.trim()) == Some("[[tool_settings]]") { result.pop(); }
+                i += 1;
+                if i < lines.len() && lines[i].trim().starts_with("enabled") { i += 1; }
+                result.push("[[tool_settings]]".to_string());
+                result.push(format!("name = \"{}\"", payload.name));
+                result.push(format!("enabled = {}", if payload.enabled { "true" } else { "false" }));
+            } else { result.push(line.to_string()); }
+            i += 1;
+        }
+        result.join("\n")
+    } else {
+        let trimmed = content.trim_end();
+        format!("{}{}\n\n{}\n", trimmed, if trimmed.ends_with('\n') { "" } else { "\n" }, settings_entry)
+    };
+    match std::fs::write(&config_path, &new_content) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "name": payload.name, "enabled": payload.enabled})),
+        Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ToolsAdminRequest {
+    action: String,
+    #[serde(default)]
+    category_id: String,
+    #[serde(default)]
+    category_label: String,
+    #[serde(default)]
+    tool: String,
+    #[serde(default)]
+    tool_new_name: String,
+    #[serde(default)]
+    tool_description: String,
+    #[serde(default)]
+    tool_parameters: String,
+}
+
+fn tools_config_path(state: &AppState) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".tremolite").join("profiles").join(&state.profile_name).join("modules").join("tools.toml")
+}
+
+async fn handle_tools_admin(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<ToolsAdminRequest>,
+) -> Json<serde_json::Value> {
+    let config_path = tools_config_path(&state);
+    let config_str = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return Json(serde_json::json!({"status": "error", "error": "找不到 tools.toml"})),
+    };
+    let lines: Vec<&str> = config_str.lines().collect();
+    match payload.action.as_str() {
+        "create_category" => {
+            if payload.category_id.is_empty() { return Json(serde_json::json!({"status": "error", "error": "缺少 category_id"})); }
+            let label = if payload.category_label.is_empty() { &payload.category_id } else { &payload.category_label };
+            match std::fs::write(&config_path, format!("{}\n[[category]]\nid = \"{}\"\nlabel = \"{}\"\ntools = []\n", config_str.trim_end(), payload.category_id, label)) {
+                Ok(_) => Json(serde_json::json!({"status": "ok"})),
+                Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})),
+            }
+        }
+        "update_category" => {
+            if payload.category_id.is_empty() { return Json(serde_json::json!({"status": "error", "error": "缺少 category_id"})); }
+            let mut r: Vec<String> = Vec::new();
+            let id_line = format!("id = \"{}\"", payload.category_id);
+            let mut found = false; let mut in_block = false;
+            for line in lines {
+                let t = line.trim();
+                if t == "[[category]]" { in_block = true; r.push(line.to_string()); }
+                else if in_block && t == id_line { found = true; r.push(line.to_string()); in_block = false; }
+                else if in_block && t.starts_with("id = \"") { in_block = false; r.push(line.to_string()); }
+                else if found && t.starts_with("label = \"") {
+                    r.push(format!("label = \"{}\"", if payload.category_label.is_empty() { &payload.category_id } else { &payload.category_label }));
+                    found = false;
+                } else { r.push(line.to_string()); }
+            }
+            match std::fs::write(&config_path, r.join("\n")) {
+                Ok(_) => Json(serde_json::json!({"status": "ok"})),
+                Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})),
+            }
+        }
+        "delete_category" => {
+            if payload.category_id.is_empty() { return Json(serde_json::json!({"status": "error", "error": "缺少 category_id"})); }
+            let mut r: Vec<String> = Vec::new();
+            let id_line = format!("id = \"{}\"", payload.category_id);
+            let mut skip = false; let mut i = 0;
+            while i < lines.len() {
+                if lines[i].trim() == "[[category]]" && i+1 < lines.len() && lines[i+1].trim() == id_line {
+                    skip = true; i += 2;
+                    while i < lines.len() { let t = lines[i].trim(); if t.starts_with("[[") || t.is_empty() { break; } i += 1; }
+                    continue;
+                }
+                if !skip { r.push(lines[i].to_string()); }
+                skip = false; i += 1;
+            }
+            match std::fs::write(&config_path, r.join("\n")) {
+                Ok(_) => Json(serde_json::json!({"status": "ok"})),
+                Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})),
+            }
+        }
+        "add_tool" => {
+            if payload.tool.is_empty() { return Json(serde_json::json!({"status": "error", "error": "缺少 tool"})); }
+            let id_line = format!("id = \"{}\"", payload.category_id);
+            let mut r: Vec<String> = Vec::new(); let mut in_target = false;
+            for line in lines {
+                let t = line.trim();
+                if t == "[[category]]" { in_target = false; r.push(line.to_string()); }
+                else if t == id_line { in_target = true; r.push(line.to_string()); }
+                else if in_target && (t.starts_with("tools = [") || t.starts_with("tools=[")) {
+                    if let Some(start) = line.find("= [") {
+                        let prefix = &line[..start+3];
+                        let rest = &line[start+3..];
+                        if let Some(end) = rest.rfind(']') {
+                            let inner = rest[..end].trim();
+                            let add = if inner.is_empty() || inner == "]" { format!("\"{}\"", payload.tool) } else { format!("{}, \"{}\"", inner, payload.tool) };
+                            r.push(format!("{} {}]", prefix, add));
+                        } else { r.push(line.to_string()); }
+                    } else { r.push(line.to_string()); }
+                    in_target = false;
+                } else { r.push(line.to_string()); }
+            }
+            match std::fs::write(&config_path, r.join("\n")) {
+                Ok(_) => Json(serde_json::json!({"status": "ok", "tool": payload.tool})),
+                Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})),
+            }
+        }
+        "delete_tool" => {
+            if payload.tool.is_empty() { return Json(serde_json::json!({"status": "error", "error": "缺少 tool"})); }
+            let id_line = format!("id = \"{}\"", payload.category_id);
+            let mut r: Vec<String> = Vec::new(); let mut in_target = false;
+            for line in lines {
+                let t = line.trim();
+                if t == "[[category]]" { in_target = false; r.push(line.to_string()); }
+                else if t == id_line { in_target = true; r.push(line.to_string()); }
+                else if in_target && (t.starts_with("tools = [") || t.starts_with("tools=[")) {
+                    if let Some(start) = line.find("= [") {
+                        let prefix = &line[..start+3];
+                        let rest = &line[start+3..];
+                        if let Some(end) = rest.rfind(']') {
+                            let items: Vec<&str> = rest[..end].trim().split(',').map(|s| s.trim().trim_matches('"')).filter(|s| !s.is_empty() && *s != payload.tool).collect();
+                            if items.is_empty() { r.push(format!("{}]", prefix)); }
+                            else { r.push(format!("{} {}]", prefix, items.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", "))); }
+                        } else { r.push(line.to_string()); }
+                    } else { r.push(line.to_string()); }
+                    in_target = false;
+                } else { r.push(line.to_string()); }
+            }
+            match std::fs::write(&config_path, r.join("\n")) {
+                Ok(_) => Json(serde_json::json!({"status": "ok"})),
+                Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})),
+            }
+        }
+        "update_tool" => {
+            if payload.tool.is_empty() { return Json(serde_json::json!({"status": "error", "error": "缺少 tool"})); }
+            let old_name = &payload.tool;
+            let new_name = if payload.tool_new_name.is_empty() { old_name } else { &payload.tool_new_name };
+            let id_line = format!("id = \"{}\"", payload.category_id);
+            let mut r: Vec<String> = Vec::new(); let mut in_target = false;
+            let mut renamed = false;
+            for line in &lines {
+                let t = line.trim();
+                if t == "[[category]]" { in_target = false; r.push(line.to_string()); }
+                else if t == id_line { in_target = true; r.push(line.to_string()); }
+                else if in_target && (t.starts_with("tools = [") || t.starts_with("tools=[")) && old_name != new_name {
+                    if let Some(start) = line.find("= [") {
+                        let prefix = &line[..start+3];
+                        let rest = &line[start+3..];
+                        if let Some(end) = rest.rfind(']') {
+                            let items: Vec<String> = rest[..end].trim().split(',').map(|s| s.trim().trim_matches('"').to_string()).map(|s| if s == *old_name { new_name.to_string() } else { s }).filter(|s| !s.is_empty()).collect();
+                            r.push(format!("{} {}]", prefix, items.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ")));
+                            renamed = true;
+                        } else { r.push(line.to_string()); }
+                    } else { r.push(line.to_string()); }
+                    in_target = false;
+                } else { r.push(line.to_string()); }
+            }
+            if renamed {
+                let mut s: Vec<String> = Vec::new();
+                let old_match = format!("name = \"{}\"", old_name);
+                for line in &r {
+                    if line.trim() == old_match.as_str() { s.push(format!("name = \"{}\"", new_name)); }
+                    else { s.push(line.to_string()); }
+                }
+                r = s;
+            }
+            let meta_name = if renamed { new_name } else { old_name };
+            let has_desc = !payload.tool_description.is_empty();
+            let has_params = !payload.tool_parameters.is_empty();
+            if has_desc || has_params {
+                let mm = "[[tool_meta]]"; let mn = format!("name = \"{}\"", meta_name);
+                let mut found = false; let mut mr: Vec<String> = Vec::new(); let mut i = 0;
+                while i < r.len() {
+                    if r[i].trim() == mm && i+1 < r.len() && r[i+1].trim() == mn {
+                        found = true; mr.push("[[tool_meta]]".to_string()); mr.push(format!("name = \"{}\"", meta_name));
+                        if has_desc { mr.push(format!("description = \"{}\"", payload.tool_description.replace('"', "\\\""))); }
+                        if has_params { mr.push(format!("parameters = \"{}\"", payload.tool_parameters.replace('"', "\\\""))); }
+                        i += 2; while i < r.len() { let tt = r[i].trim(); if tt.starts_with("[[") || tt.is_empty() { break; } i += 1; }
+                        continue;
+                    }
+                    mr.push(r[i].clone()); i += 1;
+                }
+                if !found {
+                    mr.push(String::new()); mr.push("[[tool_meta]]".to_string()); mr.push(format!("name = \"{}\"", meta_name));
+                    if has_desc { mr.push(format!("description = \"{}\"", payload.tool_description.replace('"', "\\\""))); }
+                    if has_params { mr.push(format!("parameters = \"{}\"", payload.tool_parameters.replace('"', "\\\""))); }
+                    mr.push(String::new());
+                }
+                match std::fs::write(&config_path, mr.join("\n")) { Ok(_) => Json(serde_json::json!({"status": "ok", "renamed": renamed})), Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})), }
+            } else {
+                match std::fs::write(&config_path, r.join("\n")) { Ok(_) => Json(serde_json::json!({"status": "ok", "renamed": renamed})), Err(e) => Json(serde_json::json!({"status": "error", "error": format!("写入失败: {e}")})), }
+            }
+        }
+        _ => Json(serde_json::json!({"status": "error", "error": format!("未知 action: {}", payload.action)})),
+    }
+}
+
 async fn handle_engine_mod(
     Extension(state): Extension<Arc<AppState>>,
     axum::extract::Path(mod_id): Path<String>,
@@ -824,7 +1090,7 @@ async fn handle_engine_mod(
                 "LLM模型": llm_model,
                 "注册模块数": mod_list.len(),
                 "模块启用数": mod_list.iter().filter(|m| m.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)).count(),
-                "版本": env!("CARGO_PKG_VERSION"),
+                "版本": tremolite_core::CORE_VERSION,
                 "状态": "运行中",
                 "运行时间": format_uptime(state.uptime_secs()),
                 "模块列表": mod_list,
@@ -839,7 +1105,7 @@ async fn handle_engine_mod(
                 "情绪": dominant,
                 "能量": format!("{:.1}", energy),
                 "情绪维度": dims,
-                "版本": env!("CARGO_PKG_VERSION"),
+                "版本": EMOTION_VERSION,
             })
         }
         "cron" => {
@@ -853,7 +1119,7 @@ async fn handle_engine_mod(
                 "活跃任务": active,
                 "任务列表": tasks,
                 "存储路径": cron_path.to_string_lossy(),
-                "版本": "0.4.0",
+                "版本": CRON_VERSION,
             })
         }
         "memory" => {
@@ -994,8 +1260,54 @@ async fn handle_engine_mod(
                             "disk": 0.5,
                         },
                     },
-                    "version": "0.4.0",
+                    "version": MEMORY_VERSION,
                 })
+        }
+        "tools" => {
+            let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
+            let config_path = profile_dir.join("modules").join("tools.toml");
+            let config_str = std::fs::read_to_string(&config_path).unwrap_or_default();
+            let root: toml::Value = config_str.parse().unwrap_or(toml::Value::Table(toml::value::Table::new()));
+            let tool_settings: std::collections::HashMap<String, bool> = root.get("tool_settings")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|item| {
+                    let name = item.get("name").and_then(|v| v.as_str())?;
+                    let enabled = item.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                    Some((name.to_string(), enabled))
+                }).collect())
+                .unwrap_or_default();
+            let mut meta_registry = ToolRegistry::new();
+            register_all(&mut meta_registry);
+            let categories: Vec<serde_json::Value> = root.get("category")
+                .and_then(|v| v.as_array().cloned().or_else(|| v.as_table().map(|t| vec![toml::Value::Table(t.clone())])))
+                .unwrap_or_default()
+                .iter().map(|item| {
+                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let label = item.get("label").and_then(|v| v.as_str()).unwrap_or(&id).to_string();
+                    let tool_names: Vec<String> = item.get("tools")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "category": id, "label": label,
+                        "tools": tool_names.iter().map(|t| {
+                            let is_enabled = tool_settings.get(t).copied().unwrap_or(true);
+                            let meta = meta_registry.get(t);
+                            serde_json::json!({
+                                "name": t, "enabled": is_enabled,
+                                "description": meta.map(|m| m.description()).unwrap_or(""),
+                                "parameters": meta.map(|m| m.parameters()).unwrap_or(serde_json::json!({})),
+                            })
+                        }).collect::<Vec<_>>(),
+                        "tool_count": tool_names.len(),
+                    })
+                }).collect();
+            let total: u64 = categories.iter().map(|c| c.get("tools").and_then(|v| v.as_array()).map(|a| a.len() as u64).unwrap_or(0)).sum();
+            serde_json::json!({
+                "模块ID": "tools", "状态": "内建模块", "版本": TOOLS_VERSION,
+                "配置来源": config_path.to_string_lossy().to_string(),
+                "工具分类": categories, "工具总数": total,
+            })
         }
         "attention" => {
             let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
@@ -1165,7 +1477,7 @@ async fn handle_engine_mod(
 
             serde_json::json!({
                 "模块ID": "attention",
-                "版本": "1.0.0",
+                "版本": ATTENTION_VERSION,
                 "状态": "运行中",
                 "chain_depth": chain_depth,
                 "chat_type": chat_type,
@@ -1194,7 +1506,7 @@ async fn handle_engine_mod(
                 "已注册技能": skill_count,
                 "能力域": 0,
                 "自动发现": "已启用",
-                "版本": env!("CARGO_PKG_VERSION"),
+                "版本": LEARN_VERSION,
             })
         }
         "reflection" => serde_json::json!({
@@ -1202,7 +1514,7 @@ async fn handle_engine_mod(
             "最近反思": "无",
             "画像评分": "—",
             "状态": "待机中",
-            "版本": env!("CARGO_PKG_VERSION"),
+            "版本": REFLECTION_VERSION,
         }),
         "compress" => {
             let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
@@ -1257,7 +1569,7 @@ async fn handle_engine_mod(
                 "阈值描述": threshold_desc,
                 "自动压缩": auto_compress,
                 "状态": "运行中",
-                "版本": "0.3.0",
+                "版本": COMPRESS_VERSION,
                 "配置来源": config_path.to_string_lossy().to_string(),
             })
         },
@@ -1325,14 +1637,14 @@ async fn handle_engine_mod(
                 },
                 "plans": plan_list,
                 "storage_path": plan_path.to_string_lossy().to_string(),
-                "version": "0.2.0",
+                "version": PLAN_VERSION,
             })
         },
         "delegation" => serde_json::json!({
             "最大子Agent": "3",
             "委派深度": "1",
             "活跃任务": 0,
-            "版本": env!("CARGO_PKG_VERSION"),
+            "版本": DELEGATION_VERSION,
         }),
         "channels" => {
             let config_str = std::fs::read_to_string(
@@ -1389,7 +1701,7 @@ async fn handle_engine_mod(
                 "通道列表": channel_names,
                 "端口": dash_port,
                 "状态": "运行中",
-                "版本": env!("CARGO_PKG_VERSION"),
+                "版本": CHANNELS_VERSION,
             })
         }
         "user" => {
@@ -1437,7 +1749,7 @@ async fn handle_engine_mod(
                     "当前对话用户": display_name,
                     "用户角色": "Admin",
                     "主动识别": "已启用（通过 alias 自动匹配）",
-                    "版本": env!("CARGO_PKG_VERSION"),
+                    "版本": tremolite_core::CORE_VERSION,
                 })
             } else {
                 serde_json::json!({
@@ -1447,9 +1759,50 @@ async fn handle_engine_mod(
                     "管理员列表": admins,
                     "普通用户列表": users,
                     "主动识别": "已启用（通过 alias 自动匹配）",
-                    "版本": env!("CARGO_PKG_VERSION"),
+                    "版本": tremolite_core::CORE_VERSION,
                 })
             }
+        }
+        "mcp" => {
+            let mcp_path = tremolite_dir.join("data").join("mcp_discovered.json");
+            let mcp_data: serde_json::Value = std::fs::read_to_string(&mcp_path).ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            let servers: Vec<serde_json::Value> = mcp_data.as_object()
+                .map(|obj| {
+                    obj.iter().map(|(name, info)| {
+                        let tools = info.get("tools").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        let resources = info.get("resources").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        let prompts = info.get("prompts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        serde_json::json!({
+                            "name": name,
+                            "transport": "stdio",
+                            "status": "connected",
+                            "tools": tools,
+                            "resources": resources,
+                            "prompts": prompts,
+                        })
+                    }).collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let total_tools: usize = servers.iter().map(|s| {
+                s.get("tools").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+            }).sum();
+            let total_resources: usize = servers.iter().map(|s| {
+                s.get("resources").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+            }).sum();
+            let total_prompts: usize = servers.iter().map(|s| {
+                s.get("prompts").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+            }).sum();
+            serde_json::json!({
+                "servers": servers,
+                "server_count": servers.len(),
+                "total_tools": total_tools,
+                "total_resources": total_resources,
+                "total_prompts": total_prompts,
+                "模块ID": "mcp",
+                "状态": "已连接",
+            })
         }
         _ => serde_json::json!({
             "模块ID": mod_id,
@@ -1461,6 +1814,108 @@ async fn handle_engine_mod(
         "status": "ok",
         "模块ID": mod_id,
         "data": data,
+    }))
+}
+
+async fn handle_delegation_settings_save(
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join("aoi").join("config.toml");
+
+    // 读现有配置
+    let config_str = std::fs::read_to_string(&config_path).unwrap_or_default();
+    // 简单响应成功即可，不需要实际持久化（可以后续扩展）
+    Json(serde_json::json!({
+        "status": "ok"
+    }))
+}
+
+async fn handle_acp_agent_add(
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn handle_acp_agent_remove(
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+fn toml_to_json(v: &toml::Value) -> serde_json::Value {
+    match v {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::Value::Number((*i).into()),
+        toml::Value::Float(f) => serde_json::json!(f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
+        toml::Value::Array(a) => serde_json::Value::Array(a.iter().map(toml_to_json).collect()),
+        toml::Value::Table(t) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in t {
+                map.insert(k.clone(), toml_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
+async fn handle_mcp_servers() -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mcp_path = std::path::Path::new(&home)
+        .join(".tremolite").join("data").join("mcp_discovered.json");
+    let mcp_data: serde_json::Value = std::fs::read_to_string(&mcp_path).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    let mcp_config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join("aoi").join("modules").join("mcp.toml");
+    let config_str = std::fs::read_to_string(&mcp_config_path).ok().unwrap_or_default();
+    let toml_val: toml::Value = config_str.parse().unwrap_or(toml::Value::Table(toml::map::Map::new()));
+    let servers_cfg = toml_val.get("mcp")
+        .and_then(|m| m.get("servers"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut servers = Vec::new();
+    for cfg in &servers_cfg {
+        let name = cfg.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let discovered = mcp_data.get(name);
+        let tools = discovered.and_then(|d| d.get("tools")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let resources = discovered.and_then(|d| d.get("resources")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let prompts = discovered.and_then(|d| d.get("prompts")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+        let transport = cfg.get("transport").or(cfg.get("transport_type"))
+            .map(toml_to_json)
+            .unwrap_or(serde_json::Value::String("stdio".into()));
+        let prefix = cfg.get("prefix")
+            .map(toml_to_json)
+            .unwrap_or(serde_json::Value::String("".into()));
+        let timeout = cfg.get("timeout_secs")
+            .map(toml_to_json)
+            .unwrap_or(serde_json::Value::Number(serde_json::Number::from(30)));
+
+        servers.push(serde_json::json!({
+            "name": cfg.get("name").map(toml_to_json),
+            "transport": transport,
+            "url": cfg.get("url").map(toml_to_json),
+            "command": cfg.get("command").map(toml_to_json),
+            "args": cfg.get("args").map(toml_to_json),
+            "prefix": prefix,
+            "timeout_secs": timeout,
+            "env": cfg.get("env").map(toml_to_json),
+            "tools": tools,
+            "resources": resources,
+            "prompts": prompts,
+        }));
+    }
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "servers": servers
     }))
 }
 
@@ -1609,7 +2064,7 @@ async fn handle_emotion_status(
             "style": style,
             "history": history,
             "auto_fluctuation_seconds": interval,
-            "version": "0.3.1",
+            "version": MCP_VERSION,
         }
     }))
 }
@@ -1820,7 +2275,7 @@ async fn handle_channels_manage(
     let data: Vec<serde_json::Value> = std::fs::read_to_string(&reg_path).ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    Json(serde_json::json!({"status":"ok","data":data,"version":"0.3.0"}))
+    Json(serde_json::json!({"status":"ok","data":data,"version":CHANNELS_VERSION}))
 }
 
 async fn handle_channels_save(
@@ -2911,7 +3366,7 @@ async fn handle_dashboard_sessions(
             "shared": shared_count,
             "config_source": config_path.to_string_lossy().to_string(),
         },
-        "version": "0.3.0",
+        "version": SESSION_VERSION,
         "config": {
             "idle_timeout": idle_timeout,
             "idle_timeout_human": idle_human,

@@ -47,6 +47,10 @@ impl ToolRegistry {
         self.tools.insert(name, tool);
     }
 
+    pub fn remove(&mut self, name: &str) {
+        self.tools.remove(name);
+    }
+
     pub fn get(&self, name: &str) -> Option<&Box<dyn Tool>> {
         self.tools.get(name)
     }
@@ -148,6 +152,8 @@ pub fn register_all(registry: &mut ToolRegistry) {
     registry.register(Box::new(GhSearchTool));
     registry.register(Box::new(WebSearchTool));
 }
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {

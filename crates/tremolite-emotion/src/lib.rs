@@ -597,6 +597,8 @@ pub fn style_from_emotion(label: &str) -> &'static str {
 
 // ─── 测试 ─────────────────────────────────────
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -54,6 +54,10 @@ pub enum Subcommand {
         action: String,
         args: Vec<String>,
     },
+    /// Delegate 模式——被子进程委派引擎调用，通过 stdin JSON 行协议通信
+    Delegate {
+        session_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -135,7 +139,14 @@ pub fn parse_args() -> ParsedCommand {
         .unwrap_or("run");
 
     let subcommand = match subcmd_name {
-        "run" => Subcommand::Run,
+        "run" => {
+            // --delegate 是 flag，没有子命令名，要先截住
+            if args.iter().any(|a| a == "--delegate") {
+                Subcommand::Delegate { session_id: session_id.clone() }
+            } else {
+                Subcommand::Run
+            }
+        }
         "daemon" => Subcommand::Daemon { port, dashboard_port },
         "tui" => Subcommand::Tui,
         "dashboard" => Subcommand::Dashboard { port, dashboard_port },
@@ -150,7 +161,9 @@ pub fn parse_args() -> ParsedCommand {
         "help" | "-h" | "--help" => Subcommand::Help,
         // 向后兼容：老式 flag 检测
         _ => {
-            if args.iter().any(|a| a == "--daemon") {
+            if args.iter().any(|a| a == "--delegate") {
+                Subcommand::Delegate { session_id: session_id.clone() }
+            } else if args.iter().any(|a| a == "--daemon") {
                 Subcommand::Daemon { port, dashboard_port }
             } else if args.iter().any(|a| a == "--tui") {
                 Subcommand::Tui

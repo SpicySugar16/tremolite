@@ -23,4 +23,13 @@ tremolite-dashboard = { path = "../tremolite-dashboard" }
 tremolite-message = { path = "../tremolite-message" }
 tremolite-channels = { path = "../tremolite-channels" }
 tremolite-cron = { path = "../tremolite-cron" }
+tremolite-memory = { path = "../tremolite-memory" }
+tremolite-attention = { path = "../tremolite-attention" }
+tremolite-compress = { path = "../tremolite-compress" }
+tremolite-reflection = { path = "../tremolite-reflection" }
+tremolite-delegation = { path = "../tremolite-delegation" }
+tremolite-mcp = { path = "../tremolite-mcp" }
+tremolite-session = { path = "../tremolite-session" }
+tremolite-learn = { path = "../tremolite-learn" }
+tremolite-plan = { path = "../tremolite-plan" }
 toml = "0.8"

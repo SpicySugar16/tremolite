@@ -1,4 +1,6 @@
 use std::any::Any;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use tremolite_llm::{ToolDefinition, ToolFunction};
 use tremolite_mcp::{McpManager, McpServerConfig};
@@ -18,6 +20,8 @@ pub struct McpModule {
     tool_count: usize,
     /// 服务器数量
     server_count: usize,
+    /// 发现结果缓存写入路径（dashboard 从此文件读展示数据）
+    cache_path: Option<PathBuf>,
 }
 
 impl McpModule {
@@ -27,7 +31,14 @@ impl McpModule {
             tool_defs: Vec::new(),
             tool_count: 0,
             server_count: 0,
+            cache_path: None,
         }
+    }
+
+    /// 设置发现结果缓存路径（dashboard 从此文件读展示数据）
+    pub fn with_cache_path(mut self, path: PathBuf) -> Self {
+        self.cache_path = Some(path);
+        self
     }
 
     /// 从配置初始化 MCP 服务器
@@ -43,13 +54,14 @@ impl McpModule {
     fn discover_and_register(&mut self) {
         let results = self.manager.discover_all();
         let mut defs = Vec::new();
+        let mut cache = serde_json::json!({});
 
-        for (name, prefix, tools, _resources, _prompts) in &results {
+        for (name, prefix, tools, resources, prompts) in &results {
             for tool in tools {
                 let tool_name = if prefix.is_empty() {
-                    format!("mcp.{}", tool.name)
+                    format!("mcp_{}", tool.name)
                 } else {
-                    format!("mcp.{}.{}", prefix, tool.name)
+                    format!("mcp_{}_{}", prefix, tool.name)
                 };
 
                 defs.push(ToolDefinition {
@@ -67,9 +79,28 @@ impl McpModule {
                 );
             }
             self.tool_count += tools.len();
+
+            // 写入发现缓存，供 dashboard API 读取展示
+            if let Some(obj) = cache.as_object_mut() {
+                obj.insert(name.clone(), serde_json::json!({
+                    "tools": tools,
+                    "resources": resources,
+                    "prompts": prompts,
+                }));
+            }
         }
 
         self.tool_defs = defs;
+
+        // 将缓存写入文件
+        if let Some(ref cache_path) = self.cache_path {
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let json = serde_json::to_string_pretty(&cache).unwrap_or_default();
+            let _ = std::fs::write(cache_path, json);
+            tracing::info!("mcp: wrote discovery cache to {}", cache_path.display());
+        }
     }
 }
 
@@ -101,8 +132,8 @@ impl Module for McpModule {
     }
 
     fn execute_tool(&mut self, name: &str, args: &str) -> Result<String, ModuleError> {
-        // 去掉 mcp. 前缀定位到实际工具名
-        let tool_name = if let Some(stripped) = name.strip_prefix("mcp.") {
+        // 去掉 mcp_ 前缀定位到实际工具名
+        let tool_name = if let Some(stripped) = name.strip_prefix("mcp_") {
             stripped
         } else {
             name

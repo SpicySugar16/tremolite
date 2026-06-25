@@ -85,6 +85,14 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .nav-item.drag-over{border-top:2px solid var(--accent)}
 .drag-handle{color:var(--fg3);font-size:1.6rem;cursor:grab;opacity:0.35;transition:opacity 0.15s;width:24px;text-align:center;flex-shrink:0;user-select:none;line-height:0.7}
 .nav-item:hover .drag-handle{opacity:0.8}
+.dialog{position:fixed;top:0;left:0;width:100%;height:100%;z-index:1000;display:flex;align-items:center;justify-content:center}
+.dialog-bg{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6)}
+.dialog-panel{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;width:460px;max-width:90%;max-height:90vh;overflow-y:auto}
+.dialog-panel h3{color:var(--accent);margin-bottom:16px;font-size:1rem}
+.full-input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;color:var(--fg);font-size:0.85rem;outline:none;box-sizing:border-box;margin-bottom:8px}
+.full-input:focus{border-color:var(--accent)}
+textarea.full-input{resize:vertical;min-height:60px}
+select.full-input{cursor:pointer}
 </style>
 </head>
 <body>
@@ -1493,6 +1501,263 @@ async function renderBoardModule(el, modId){
   }
 }
 
+// ─── Delegation Module ────
+async function renderDelegationModule(el){
+  try {
+    const [engRes, setRes, acpAgentsRes, acpTasksRes] = await Promise.all([
+      api('/dashboard/engine/delegation').catch(function(){return{data:{}};}),
+      api('/dashboard/delegation/settings').catch(function(){return{data:{max_sub_agents:3,max_depth:1,default_timeout:300}};}),
+      api('/dashboard/delegation/acp/agents').catch(function(){return{data:{agents:[]}};}),
+      api('/dashboard/delegation/acp/tasks').catch(function(){return{data:{tasks:[]}};})
+    ]);
+    const eng = engRes.data || {};
+    const set = setRes.data || {};
+    const acpAgents = (acpAgentsRes.data||{}).agents || [];
+    const acpTasks = (acpTasksRes.data||{}).tasks || [];
+    const maxSub = set.max_sub_agents || 3;
+    const maxDep = set.max_depth || 1;
+    const defTimeout = set.default_timeout || 300;
+
+    let html = '';
+
+    // 卡片1: 状态概览
+    html += '<div class="grid-2">';
+    html += '<div class="card acp-overview"><div class="card-hd"><h3>\uD83D\uDCCA 状态概览 <span class="acp-live-dot" style="font-size:0.7rem;color:var(--green);font-weight:normal">\uD83D\uDFE2 ACP 实时</span></h3></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">活跃任务数</span><span class="v acp-val" style="font-size:1.2rem;font-family:var(--mono)">'+(eng['活跃任务']||0)+'</span></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">已完成任务</span><span class="v acp-val" style="font-size:1.2rem;font-family:var(--mono)">'+(eng['已完成任务']||0)+'</span></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">累计委派</span><span class="v acp-val" style="font-size:1.2rem;font-family:var(--mono)">'+(eng['累计委派']||0)+'</span></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">已配置 ACP Agent</span><span class="v acp-val" style="font-size:1.2rem;font-family:var(--mono)">'+(eng['acp_agents']||0)+'</span></div></div>';
+    html += '<div class="card"><div class="card-hd"><h3>\u2699\uFE0F 参数</h3></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">最大子Agent</span><span class="v" style="font-size:1.2rem;font-family:var(--mono)">'+maxSub+'</span></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">委派深度</span><span class="v" style="font-size:1.2rem;font-family:var(--mono)">'+maxDep+'</span></div>' +
+      '<div class="row"><span class="l" style="font-size:0.72rem;color:var(--fg2)">默认超时</span><span class="v" style="font-size:1.2rem;font-family:var(--mono)">'+defTimeout+'s</span></div></div>';
+    html += '</div>';
+
+    // 卡片2: 配置管理
+    html += '<div class="card"><div class="card-hd"><h3>\u2699\uFE0F 配置管理</h3></div>' +
+      '<div class="dim-row">' +
+      '<div class="dim-label" style="width:100px;text-align:left;font-size:0.78rem;color:var(--fg2)">最大子Agent</div>' +
+      '<input type="range" class="dim-slider" min="1" max="10" step="1" value="'+maxSub+'" oninput="handleDelegationSlider(\'maxSubDisplay\',this.value)" id="delMaxSubSlider">' +
+      '<span id="maxSubDisplay" style="font-family:var(--mono);font-size:0.78rem;color:var(--fg);min-width:1.5em;text-align:center">'+maxSub+'</span></div>' +
+      '<div class="dim-row">' +
+      '<div class="dim-label" style="width:100px;text-align:left;font-size:0.78rem;color:var(--fg2)">委派深度</div>' +
+      '<input type="range" class="dim-slider" min="1" max="5" step="1" value="'+maxDep+'" oninput="handleDelegationSlider(\'maxDepthDisplay\',this.value)" id="delMaxDepthSlider">' +
+      '<span id="maxDepthDisplay" style="font-family:var(--mono);font-size:0.78rem;color:var(--fg);min-width:1.5em;text-align:center">'+maxDep+'</span></div>' +
+      '<div class="dim-row">' +
+      '<div class="dim-label" style="width:100px;text-align:left;font-size:0.78rem;color:var(--fg2)">默认超时(秒)</div>' +
+      '<input type="number" class="dim-input" min="30" max="600" step="1" value="'+defTimeout+'" id="delTimeoutInput" style="width:80px;font-family:var(--mono)">' +
+      '<span style="font-size:0.72rem;color:var(--fg3)">30-600</span></div>' +
+      '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px">' +
+      '<button class="btn accent" onclick="saveDelegationSettings()">\uD83D\uDCBE 保存配置</button>' +
+      '<span id="delSettingsFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div></div>';
+
+    // 卡片3: ACP Agent 配置
+    html += '<div class="card"><div class="card-hd"><h3>\uD83E\uDD16 ACP Agent</h3></div>';
+    if (acpAgents.length === 0) {
+      html += '<div style="color:var(--fg2);font-size:0.78rem;padding:8px 0;text-align:center">暂无 ACP Agent</div>';
+    } else {
+      html += '<table class="acp-agent-table" style="width:100%;border-collapse:collapse;font-size:0.78rem">' +
+        '<thead><tr style="color:var(--fg3);border-bottom:1px solid var(--border)">' +
+        '<th style="padding:6px 4px;text-align:left">名称</th>' +
+        '<th style="padding:6px 4px;text-align:left">命令</th>' +
+        '<th style="padding:6px 4px;text-align:left">模型</th>' +
+        '<th style="padding:6px 4px;text-align:left">状态</th>' +
+        '<th style="padding:6px 4px;text-align:left">操作</th></tr></thead><tbody>';
+      for (const a of acpAgents) {
+        const statusIcon = a.enabled ? '\uD83D\uDFE2 启用' : '\uD83D\uDD34 停用';
+        html += '<tr style="border-bottom:1px solid var(--bg3)">' +
+          '<td style="padding:6px 4px;font-family:var(--mono)">'+esc(a.name||'')+'</td>' +
+          '<td style="padding:6px 4px;color:var(--fg2)">'+esc((a.command||'')+' '+(a.args||''))+'</td>' +
+          '<td style="padding:6px 4px;color:var(--fg2)">'+esc(a.model||'')+'</td>' +
+          '<td style="padding:6px 4px;color:'+(a.enabled?'var(--green)':'var(--red)')+'">'+statusIcon+'</td>' +
+          '<td style="padding:6px 4px"><button class="btn sm" onclick="removeAcpAgent(\''+esc(a.name)+'\')">删除</button></td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+    html += '<div style="margin-top:8px">';
+    html += '<button class="btn sm" onclick="toggleAcpAddForm()">\u2795 添加 Agent</button>';
+    html += '</div>';
+    html += '<div id="acpAddForm" style="display:none;margin-top:8px;padding:8px;background:var(--bg2);border-radius:var(--radius-sm)">';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">';
+    html += '<div><span style="font-size:0.72rem;color:var(--fg2)">名称</span><br><input id="acpAddName" placeholder="opencode" style="width:90%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--fg);font-size:0.78rem;outline:none"></div>';
+    html += '<div><span style="font-size:0.72rem;color:var(--fg2)">命令</span><br><input id="acpAddCommand" placeholder="opencode" style="width:90%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--fg);font-size:0.78rem;outline:none"></div>';
+    html += '<div><span style="font-size:0.72rem;color:var(--fg2)">参数</span><br><input id="acpAddArgs" placeholder="run --dangerously-skip-permissions --format json" style="width:90%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--fg);font-size:0.78rem;outline:none"></div>';
+    html += '<div><span style="font-size:0.72rem;color:var(--fg2)">模型</span><br><input id="acpAddModel" placeholder="deepseek/deepseek-v4-flash" style="width:90%;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 8px;color:var(--fg);font-size:0.78rem;outline:none"></div>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">';
+    html += '<span id="acpAddFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span>';
+    html += '<button class="btn accent" onclick="addAcpAgent()">\uD83D\uDCBE 保存</button>';
+    html += '</div></div>';
+    html += '</div>';
+
+    // 卡片5: ACP 任务历史
+    html += '<div class="card"><div class="card-hd"><h3>\uD83D\uDCCB 委派历史</h3></div>';
+    if (!acpTasks.length) {
+      html += '<div style="color:var(--fg2);font-size:0.78rem;padding:12px 0;text-align:center">暂无委派任务</div>';
+    } else {
+      const sortedTasks = [...acpTasks].reverse();
+      html += '<table class="acp-history-table" style="width:100%;border-collapse:collapse;font-size:0.78rem">' +
+        '<thead><tr style="color:var(--fg3);border-bottom:1px solid var(--border)">' +
+        '<th style="padding:6px 4px;text-align:left">任务ID</th>' +
+        '<th style="padding:6px 4px;text-align:left">Agent</th>' +
+        '<th style="padding:6px 4px;text-align:left">目标摘要</th>' +
+        '<th style="padding:6px 4px;text-align:left">状态</th>' +
+        '<th style="padding:6px 4px;text-align:left">时间</th>' +
+        '<th style="padding:6px 4px;text-align:left">结果</th></tr></thead><tbody>';
+      for (const t of sortedTasks) {
+        const statusColor = t.status === 'completed' ? 'var(--green)' : t.status === 'running' ? 'var(--blue)' : 'var(--red)';
+        const ts = t.created_at ? new Date(t.created_at * 1000).toLocaleString() : '';
+        const summary = (t.goal||'').substring(0, 40) + ((t.goal||'').length > 40 ? '...' : '');
+        const resultPreview = (t.result||'').substring(0, 60) + ((t.result||'').length > 60 ? '...' : '');
+        html += '<tr style="border-bottom:1px solid var(--bg3)">' +
+          '<td style="padding:6px 4px;font-family:var(--mono)">'+esc(t.id||'')+'</td>' +
+          '<td style="padding:6px 4px">'+esc(t.agent||'')+'</td>' +
+          '<td style="padding:6px 4px;color:var(--fg2)" title="'+esc(t.goal||'')+'">'+esc(summary)+'</td>' +
+          '<td style="padding:6px 4px"><span style="color:'+statusColor+'">'+esc(t.status||'')+'</span></td>' +
+          '<td style="padding:6px 4px;color:var(--fg3);font-size:0.72rem">'+esc(ts)+'</td>' +
+          '<td style="padding:6px 4px;color:var(--fg2);font-size:0.72rem" title="'+esc(t.result||'')+'">'+esc(resultPreview)+'</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+
+    html += '<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">任务委派 v0.1.0</span></div>';
+
+    el.innerHTML = html;
+
+    // 启动实时刷新（ACP 风格 JSON 轮询，每10秒）
+    if (el._acpTimer) clearInterval(el._acpTimer);
+    el._acpTimer = setInterval(function() {
+      refreshAcpStatus(el);
+    }, 10000);
+  } catch(e) {
+    el.innerHTML = '<div class="error">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ─── ACP 实时状态刷新（增量更新，不重绘整个页面） ────
+let _acpRefreshCounter = 0;
+async function refreshAcpStatus(el) {
+  _acpRefreshCounter++;
+  try {
+    // 并发拉取 ACP 状态（ACP 风格 JSON）
+    const [engRes, acpAgentsRes, acpTasksRes] = await Promise.all([
+      api('/dashboard/engine/delegation'),
+      api('/dashboard/delegation/acp/agents'),
+      api('/dashboard/delegation/acp/tasks')
+    ]);
+    const eng = engRes.data || {};
+    const acpAgents = (acpAgentsRes.data||{}).agents || [];
+    const acpTasks = (acpTasksRes.data||{}).tasks || [];
+
+    // 刷新状态概览的数字
+    const overview = el.querySelector('.acp-overview');
+    if (overview) {
+      const vals = overview.querySelectorAll('.acp-val');
+      if (vals.length >= 4) {
+        vals[0].textContent = eng['活跃任务'] || 0;
+        vals[1].textContent = eng['已完成任务'] || 0;
+        vals[2].textContent = eng['累计委派'] || 0;
+        vals[3].textContent = eng['acp_agents'] || 0;
+      }
+    }
+
+    // 刷新 ACP agent 表格（替换 tbody）
+    const agentTable = el.querySelector('.acp-agent-table');
+    if (agentTable) {
+      const tbody = agentTable.querySelector('tbody');
+      if (tbody) {
+        let rows = '';
+        for (const a of acpAgents) {
+          const statusIcon = a.enabled ? '\uD83D\uDFE2 启用' : '\uD83D\uDD34 停用';
+          rows += '<tr style="border-bottom:1px solid var(--bg3)">' +
+            '<td style="padding:6px 4px;font-family:var(--mono)">'+esc(a.name||'')+'</td>' +
+            '<td style="padding:6px 4px;color:var(--fg2)">'+esc((a.command||'')+' '+(a.args||''))+'</td>' +
+            '<td style="padding:6px 4px;color:var(--fg2)">'+esc(a.model||'')+'</td>' +
+            '<td style="padding:6px 4px;color:'+(a.enabled?'var(--green)':'var(--red)')+'">'+statusIcon+'</td>' +
+            '<td style="padding:6px 4px"><button class="btn sm" onclick="removeAcpAgent(\''+esc(a.name)+'\')">删除</button></td></tr>';
+        }
+        tbody.innerHTML = rows;
+      }
+
+      // 如果 agent 列表为空，显示占位
+      const emptyMsg = agentTable.parentElement.querySelector('.acp-empty');
+      if (emptyMsg) {
+        emptyMsg.style.display = acpAgents.length === 0 ? 'block' : 'none';
+      }
+    }
+
+    // 刷新委派历史表格（替换 tbody）
+
+    const histTable = el.querySelector('.acp-history-table');
+    if (histTable) {
+      const tbody = histTable.querySelector('tbody');
+      if (tbody) {
+        let hrows = '';
+        if (acpTasks.length === 0) {
+          hrows = '<tr><td colspan="6" style="text-align:center;color:var(--fg2);padding:12px">暂无委派任务</td></tr>';
+        } else {
+          const sortedTasks = [...acpTasks].reverse();
+          for (const t of sortedTasks) {
+            const statusColor = t.status === 'completed' ? 'var(--green)' : t.status === 'running' ? 'var(--blue)' : 'var(--red)';
+            const ts = t.created_at ? new Date(t.created_at * 1000).toLocaleString() : '';
+            const summary = (t.goal||'').substring(0, 40) + ((t.goal||'').length > 40 ? '...' : '');
+            const resultPreview = (t.result||'').substring(0, 60) + ((t.result||'').length > 60 ? '...' : '');
+            hrows += '<tr style="border-bottom:1px solid var(--bg3)">' +
+              '<td style="padding:6px 4px;font-family:var(--mono)">'+esc(t.id||'')+'</td>' +
+              '<td style="padding:6px 4px">'+esc(t.agent||'')+'</td>' +
+              '<td style="padding:6px 4px;color:var(--fg2)" title="'+esc(t.goal||'')+'">'+esc(summary)+'</td>' +
+              '<td style="padding:6px 4px"><span style="color:'+statusColor+'">'+esc(t.status||'')+'</span></td>' +
+              '<td style="padding:6px 4px;color:var(--fg3);font-size:0.72rem">'+esc(ts)+'</td>' +
+              '<td style="padding:6px 4px;color:var(--fg2);font-size:0.72rem" title="'+esc(t.result||'')+'">'+esc(resultPreview)+'</td></tr>';
+          }
+        }
+        tbody.innerHTML = hrows;
+      }
+    }
+
+    // 刷新状态指示器（绿色脉冲点）
+    const statusDot = el.querySelector('.acp-live-dot');
+    if (statusDot) {
+      statusDot.innerHTML = '\uD83D\uDFE2 ACP 实时 &#xb7; ' + _acpRefreshCounter;
+    }
+  } catch(e) {
+    // 静默失败，下次再试
+  }
+}
+
+window.handleDelegationSlider=function(id, val) {
+  document.getElementById(id).textContent = val;
+};
+
+window.saveDelegationSettings=function() {
+  var fb = document.getElementById('delSettingsFeedback');
+  if (fb) { fb.textContent = '保存中...'; fb.style.color = 'var(--fg2)'; }
+
+  var maxSub = parseInt(document.getElementById('delMaxSubSlider').value, 10);
+  var maxDepth = parseInt(document.getElementById('delMaxDepthSlider').value, 10);
+  var timeout = parseInt(document.getElementById('delTimeoutInput').value, 10) || 300;
+
+  var body = {
+    max_sub_agents: maxSub,
+    max_depth: maxDepth,
+    default_timeout: timeout
+  };
+
+  apiPost('/dashboard/delegation/settings', body).then(function(r) {
+    if (r.status === 'ok') {
+      if (fb) { fb.textContent = '\u2713 已保存'; fb.style.color = 'var(--green)'; }
+      setTimeout(function() {
+        navigate('module', 'delegation');
+      }, 800);
+    } else {
+      if (fb) { fb.textContent = '\u2717 保存失败: ' + (r.error || ''); fb.style.color = 'var(--red)'; }
+    }
+  }).catch(function(e) {
+    if (fb) { fb.textContent = '\u2717 网络错误'; fb.style.color = 'var(--red)'; }
+  });
+};
+
 // ─── Module Detail Page ────
 async function renderModule(el,modId,statusData){
   // Check if modId matches board module (by name or from registered modules list)
@@ -1553,6 +1818,15 @@ async function renderModule(el,modId,statusData){
       }else if(modId==='session'){
         // 会话管理器引擎模块页 → 借用 hash-route 的 sessions API
         renderSessionsPage(el);
+        return;
+      }else if(modId==='delegation'){
+        renderDelegationModule(el);
+        return;
+      }else if(modId==='mcp'){
+        renderMcpPage(el,d.data).catch(function(e){console.error(e);});
+        return;
+      }else if(modId==='tools'){
+        renderToolsPage(el,d.data);
         return;
       }else{
       for(const [k,v] of Object.entries(d)){
@@ -2595,6 +2869,113 @@ async function showPlanDetail(planId) {
 
 document.addEventListener('DOMContentLoaded',init);
 
+// ─── MCP Module Page ────
+async function renderMcpPage(el, data){
+  if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
+  const servers=data.servers||[];
+  const svrCount=data.server_count||servers.length;
+  const toolCount=data.total_tools||0;
+  const resCount=data.total_resources||0;
+  const promptCount=data.total_prompts||0;
+
+  // Load tool overrides
+  var overrides = {};
+  try {
+    var ov = await api('/dashboard/mcp/tool-overrides');
+    if (ov && ov.status === 'ok') overrides = ov.overrides || {};
+  } catch(e) { console.error('load overrides failed', e); }
+
+  let html='';
+  html+='<div class="card"><div class="card-hd"><h3>🔌 MCP 客户端总览</h3>'+
+    '<button class="btn sm" style="margin-left:auto" onclick="showMcpAdd()">+ 添加服务器</button>'+
+    '</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">'+
+    '<span class="badge-accent" style="background:#4CAF50;color:#fff">服务器: '+svrCount+'</span>'+
+    '<span class="badge-accent" style="background:#2196F3;color:#fff">工具: '+toolCount+'</span>'+
+    '<span class="badge-accent" style="background:#FF9800;color:#fff">资源: '+resCount+'</span>'+
+    '<span class="badge-accent" style="background:#9C27B0;color:#fff">提示: '+promptCount+'</span>'+
+    '</div></div>';
+  if(servers.length===0){
+    html+='<div class="card"><div style="padding:20px;text-align:center;color:var(--fg2);font-size:0.85rem">'+
+      '尚未配置 MCP 服务器。<br><br>'+
+      '在 config.toml 中添加 <code>[mcp]</code> 段：<br>'+
+      '<pre style="background:var(--bg2);padding:10px;border-radius:var(--radius-sm);margin-top:8px;font-size:0.75rem;text-align:left;display:inline-block">'+
+      '[mcp]\nservers = [\n  { name = "my-server", url = "http://localhost:8080/mcp" }\n]'+
+      '</pre></div></div>';
+  }else{
+    for(var idx=0;idx<servers.length;idx++){var s=servers[idx];
+      const name=s.name||'unknown';
+      const transport=s.transport||'http';
+      const status=s.status||'no tools discovered';
+      const tools=s.tools||[];
+      const resources=s.resources||[];
+      const prompts=s.prompts||[];
+      const srvOverrides=overrides[name]||{};
+      let statusColor='var(--yellow)';
+      let statusLabel='未发现工具';
+      if(status==='connected'){statusColor='var(--green)';statusLabel='已连接';}
+      else if(status==='error'){statusColor='var(--red)';statusLabel='错误';}
+      html+='<div class="card">'+
+        '<div class="card-hd"><h3>🖥 '+esc(name)+' <span style="color:'+statusColor+';font-size:0.72rem;font-weight:normal">● '+statusLabel+'</span></h3></div>'+
+        '<div class="row"><span class="l">传输方式</span><span class="v">'+(transport==='http'?'HTTP':transport==='sse'?'SSE':transport==='stdio'?'Stdio':transport)+'</span></div>'+
+        (s.url?'<div class="row"><span class="l">URL</span><span class="v" style="font-size:0.7rem;font-family:var(--mono)">'+esc(s.url)+'</span></div>':'')+
+        (s.command?'<div class="row"><span class="l">命令</span><span class="v" style="font-size:0.7rem;font-family:var(--mono)">'+esc(s.command)+(s.args?esc(' '+s.args.join(' ')):'')+'</span></div>':'')+
+        // 环境变量显示
+        (s.env?function(){var e=s.env,k=Object.keys(e);if(!k.length)return'';var lines=k.map(function(x){return x+'='+e[x];}).join('<br>');return'<div class="row"><span class="l">环境变量</span><span class="v" style="font-size:0.7rem;font-family:var(--mono)">'+lines+'</span></div>';}():'')+
+        (s.prefix?'<div class="row"><span class="l">前缀</span><span class="v">'+esc(s.prefix)+'</span></div>':'')+
+        '<div class="row"><span class="l">超时</span><span class="v">'+(s.timeout_secs||30)+' 秒</span></div>';
+      if(tools.length>0){
+        html+='<div style="margin-top:8px"><strong style="color:var(--accent);font-size:0.78rem">🔧 工具 ('+tools.length+')</strong></div>'+
+          '<table class="hist-table" style="margin-top:4px"><thead><tr><th style="width:60px">状态</th><th>名称</th><th>描述</th><th style="width:70px">参数</th></tr></thead><tbody>';
+        for(const t of tools){
+          const params=t.input_schema&&t.input_schema.properties?Object.keys(t.input_schema.properties).length:0;
+          const tOverride=srvOverrides[t.name]||{};
+          const isEnabled=tOverride.enabled===undefined?true:tOverride.enabled;
+          const isOverridden=!!t._overridden;
+          const toggleId='tog_'+esc(name)+'_'+esc(t.name);
+          html+='<tr>'+
+            '<td style="text-align:center">'+
+              '<label class="toggle"><input type="checkbox" id="'+toggleId+'" '+(isEnabled?'checked':'')+' onchange="toggleMcpTool(\''+esc(name)+'\',\''+esc(t.name)+'\',this.checked)"><span class="sl"></span></label>'+
+            '</td>'+
+            '<td style="font-family:var(--mono);color:var(--accent);font-size:0.72rem">'+
+              esc(t.name)+(isOverridden?' <span title="已自定义描述" style="color:var(--yellow);font-size:0.6rem">✎</span>':'')+
+            '</td>'+
+            '<td style="font-size:0.72rem;color:var(--fg2);cursor:pointer;text-decoration:underline dotted" onclick="editMcpToolDesc(\''+esc(name)+'\',\''+esc(t.name)+'\',\''+esc((t.description||'').replace(/'/g,"\'"))+'\')">'+esc(t.description||'')+'</td>'+
+            '<td style="text-align:center;font-size:0.72rem">'+params+' 个</td></tr>';
+        }
+        html+='</tbody></table>';
+      }
+      if(resources.length>0){
+        html+='<div style="margin-top:8px"><strong style="color:var(--fg2);font-size:0.78rem">📄 资源 ('+resources.length+')</strong></div>'+
+          '<table class="hist-table" style="margin-top:4px"><thead><tr><th>URI</th><th>名称</th><th>描述</th></tr></thead><tbody>';
+        for(const r of resources){
+          html+='<tr><td style="font-family:var(--mono);font-size:0.7rem;color:var(--fg2)">'+esc(r.uri)+'</td>'+
+            '<td style="font-size:0.72rem">'+esc(r.name)+'</td>'+
+            '<td style="font-size:0.72rem;color:var(--fg2)">'+esc(r.description||'')+'</td></tr>';
+        }
+        html+='</tbody></table>';
+      }
+      if(prompts.length>0){
+        html+='<div style="margin-top:8px"><strong style="color:var(--fg2);font-size:0.78rem">💬 提示 ('+prompts.length+')</strong></div>'+
+          '<table class="hist-table" style="margin-top:4px"><thead><tr><th>名称</th><th>描述</th><th>参数</th></tr></thead><tbody>';
+        for(const p of prompts){
+          const argCount=p.arguments?p.arguments.length:0;
+          html+='<tr><td style="font-family:var(--mono);color:var(--accent);font-size:0.72rem">'+esc(p.name)+'</td>'+
+            '<td style="font-size:0.72rem;color:var(--fg2)">'+esc(p.description||'')+'</td>'+
+            '<td style="text-align:center;font-size:0.72rem">'+argCount+' 个</td></tr>';
+        }
+        html+='</tbody></table>';
+      }
+      html+='<div style="display:flex;gap:4px;justify-content:flex-end;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">'+
+        '<button class="btn sm" onclick="showMcpEdit('+idx+')">✏️ 编辑</button>'+
+        '<button class="btn sm" style="color:var(--red)" onclick="deleteMcp('+idx+')">✕ 删除</button>'+
+        '</div></div>';
+    }
+  }
+  html+='<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">MCP 模块 v'+esc(data.version||'0.1.0')+'</span></div>';
+  el.innerHTML=html;
+}
+
 // ─── Compress Module Page ────
 function renderCompressPage(el, data){
   if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
@@ -2738,6 +3119,408 @@ window.saveCompressConfig=function(){
   if(fb) fb.textContent='已保存';
   setTimeout(function(){if(fb) fb.textContent='';},2000);
 };
+
+// ─── Delegation ACP helpers ────
+window.toggleAcpAddForm=function(){
+  var el=document.getElementById('acpAddForm');
+  if(el) el.style.display=el.style.display==='none'?'block':'none';
+};
+window.addAcpAgent=async function(){
+  var fb=document.getElementById('acpAddFeedback');
+  if(fb) fb.textContent='保存中...';
+  var name=document.getElementById('acpAddName').value.trim();
+  if(!name){if(fb)fb.textContent='请输入名称';return;}
+  var body={
+    name:name,
+    command:document.getElementById('acpAddCommand').value.trim()||'opencode',
+    args:document.getElementById('acpAddArgs').value.trim()||'run --dangerously-skip-permissions --format json',
+    model:document.getElementById('acpAddModel').value.trim()||'deepseek/deepseek-v4-flash',
+    enabled:true
+  };
+  var r=await apiPost('/dashboard/delegation/acp/add',body);
+  if(r.status==='ok'){
+    if(fb){fb.textContent='\u2713 已添加';fb.style.color='var(--green)';}
+    // 自动刷新列表
+    var delEl=document.getElementById('delModule');
+    if(delEl) refreshAcpStatus(delEl);
+  }else{
+    if(fb){fb.textContent='\u2717 '+(r.error||'失败');fb.style.color='var(--red)';}
+  }
+};
+window.removeAcpAgent=async function(name){
+  if(!confirm('\u786E\u5B9A\u5220\u9664 ACP Agent: '+name+'\uFF1F'))return;
+  var r=await apiPost('/dashboard/delegation/acp/remove',{name:name});
+  if(r.status==='ok'){
+    var delEl=document.getElementById('delModule');
+    if(delEl) refreshAcpStatus(delEl);
+  }
+};
+window.spawnAcpTask=async function(){
+  // ACP 委派已改为引擎自动触发，前端不再需要手动委派
+};
+
+// ─── MCP 服务器编辑对话框 ───
+window.mcpAddDlg_html='<!-- ─── MCP 服务器编辑对话框 ──── -->'+
+'<div id="mcpAddDlg" class="dialog" style="display:none">'+
+'  <div class="dialog-bg" onclick="closeMcpDlg()"></div>'+
+'  <div class="dialog-panel" style="max-width:480px">'+
+'    <h3><span id="mcpDlgTitle">添加 MCP 服务器</span></h3>'+
+'    <input id="mcpEditIdx" type="hidden" value="-1">'+
+
+'    <div class="row"><span class="l">服务器名称</span></div>'+
+'    <input id="mcpName" class="full-input" placeholder="my-server">'+
+
+'    <div class="row"><span class="l">传输方式</span></div>'+
+'    <select id="mcpTransport" class="full-input" onchange="switchMcpTransport()">'+
+'      <option value="http">HTTP JSON-RPC</option>'+
+'      <option value="sse">SSE (Server-Sent Events)</option>'+
+'      <option value="stdio">Stdio 子进程</option>'+
+'    </select>'+
+
+'    <div id="mcpUrlGroup">'+
+'      <div class="row"><span class="l">URL</span></div>'+
+'      <input id="mcpUrl" class="full-input" placeholder="http://localhost:8080/mcp">'+
+'    </div>'+
+
+'    <div id="mcpStdioGroup" style="display:none">'+
+'      <div class="row"><span class="l">命令</span></div>'+
+'      <input id="mcpCommand" class="full-input" placeholder="npx">'+
+'      <div class="row"><span class="l">参数（每行一个）</span></div>'+
+'      <textarea id="mcpArgs" class="full-input" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/home/spicysugar"></textarea>'+
+'    </div>'+
+
+'    <div class="row"><span class="l">工具前缀</span></div>'+
+'    <input id="mcpPrefix" class="full-input" placeholder="可选">'+
+
+'    <div class="row"><span class="l">超时（秒）</span></div>'+
+'    <input id="mcpTimeout" class="full-input" type="number" value="30">'+
+
+'    <div class="row"><span class="l">环境变量（每行一个 KEY=VALUE）</span></div>'+
+'    <textarea id="mcpEnv" class="full-input" rows="3" placeholder="BRAVE_API_KEY=your_key_here&#10;OPENAI_API_KEY=sk-xxx"></textarea>'+
+
+'    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">'+
+'      <button class="btn" onclick="closeMcpDlg()">取消</button>'+
+'      <button class="btn primary" onclick="doSaveMcp()">保存</button>'+
+'    </div>'+
+'  </div>'+
+'</div>';
+document.write(mcpAddDlg_html);
+
+// ─── MCP CRUD ───
+window.switchMcpTransport = function(){
+  var t = document.getElementById('mcpTransport').value;
+  document.getElementById('mcpUrlGroup').style.display = (t==='http'||t==='sse') ? 'block' : 'none';
+  document.getElementById('mcpStdioGroup').style.display = (t==='stdio') ? 'block' : 'none';
+};
+
+window.showMcpAdd = function(){
+  document.getElementById('mcpEditIdx').value = '-1';
+  document.getElementById('mcpDlgTitle').textContent = '添加 MCP 服务器';
+  document.getElementById('mcpName').value = '';
+  document.getElementById('mcpTransport').value = 'http';
+  document.getElementById('mcpUrl').value = '';
+  document.getElementById('mcpCommand').value = '';
+  document.getElementById('mcpArgs').value = '';
+  document.getElementById('mcpPrefix').value = '';
+  document.getElementById('mcpTimeout').value = '30';
+  document.getElementById('mcpEnv').value = '';
+  switchMcpTransport();
+  document.getElementById('mcpAddDlg').style.display = 'flex';
+};
+
+window.showMcpEdit = async function(idx){
+  var r = await api('/dashboard/mcp/servers');
+  if(r.status!=='ok'||!r.servers||idx>=r.servers.length) return;
+  var s = r.servers[idx];
+  document.getElementById('mcpEditIdx').value = String(idx);
+  document.getElementById('mcpDlgTitle').textContent = '修改 MCP 服务器';
+  document.getElementById('mcpName').value = s.name||'';
+  document.getElementById('mcpTransport').value = s.transport||'http';
+  document.getElementById('mcpUrl').value = s.url||'';
+  document.getElementById('mcpCommand').value = s.command||'';
+  document.getElementById('mcpArgs').value = (s.args||[]).join('\n');
+  document.getElementById('mcpPrefix').value = s.prefix||'';
+  document.getElementById('mcpTimeout').value = s.timeout_secs||30;
+  // 环境变量
+  var envLines = [];
+  if(s.env && typeof s.env === 'object'){
+    for(var k in s.env){ if(s.env.hasOwnProperty(k)) envLines.push(k+'='+s.env[k]); }
+  }
+  document.getElementById('mcpEnv').value = envLines.join('\n');
+  switchMcpTransport();
+  document.getElementById('mcpAddDlg').style.display = 'flex';
+};
+
+window.closeMcpDlg = function(){
+  document.getElementById('mcpAddDlg').style.display = 'none';
+};
+
+window.doSaveMcp = async function(){
+  var idx = parseInt(document.getElementById('mcpEditIdx').value || '-1');
+  var name = document.getElementById('mcpName').value.trim();
+  if(!name){ alert('请输入服务器名称'); return; }
+  var transport = document.getElementById('mcpTransport').value;
+  var url = document.getElementById('mcpUrl').value.trim();
+  var command = document.getElementById('mcpCommand').value.trim();
+  var argsText = document.getElementById('mcpArgs').value.trim();
+  var args = argsText ? argsText.split('\n').map(function(x){return x.trim();}).filter(function(x){return x;}) : [];
+  var prefix = document.getElementById('mcpPrefix').value.trim();
+  var timeout = parseInt(document.getElementById('mcpTimeout').value) || 30;
+
+  // 解析环境变量
+  var envText = document.getElementById('mcpEnv').value.trim();
+  var envObj = {};
+  if(envText){
+    envText.split('\n').forEach(function(line){
+      line = line.trim();
+      if(!line) return;
+      var eq = line.indexOf('=');
+      if(eq>0) envObj[line.substring(0,eq).trim()] = line.substring(eq+1).trim();
+    });
+  }
+
+  var payload = { name: name, transport: transport, prefix: prefix, timeout_secs: timeout, env: envObj };
+  if(transport==='http'||transport==='sse'){
+    payload.url = url;
+  }else if(transport==='stdio'){
+    payload.command = command;
+    payload.args = args;
+  }
+
+  if(idx>=0){
+    await apiPost('/dashboard/mcp/'+idx+'/update', payload);
+  }else{
+    await apiPost('/dashboard/mcp/create', payload);
+  }
+  closeMcpDlg();
+  var d = await api('/dashboard/engine/mcp');
+  if(d.status==='ok') await renderMcpPage(document.getElementById('pageContent'), d.data);
+};
+window.deleteMcp = async function(idx){
+  if(!confirm('确定删除这个 MCP 服务器吗？')) return;
+  await apiPost('/dashboard/mcp/'+idx+'/delete', {});
+  var d = await api('/dashboard/engine/mcp');
+  if(d.status==='ok') await renderMcpPage(document.getElementById('pageContent'), d.data);
+};
+
+window.toggleMcpTool = async function(serverName, toolName, enabled){
+  try {
+    await apiPost('/dashboard/mcp/'+encodeURIComponent(serverName)+'/tools/'+encodeURIComponent(toolName)+'/toggle', { enabled: enabled });
+  } catch(e) {
+    console.error('toggle tool failed', e);
+  }
+};
+
+window.editMcpToolDesc = async function(serverName, toolName, currentDesc){
+  var newDesc = prompt('修改工具描述：\n\n工具: ' + toolName + '\n服务器: ' + serverName, currentDesc || '');
+  if (newDesc === null) return; // cancelled
+  try {
+    await apiPost('/dashboard/mcp/'+encodeURIComponent(serverName)+'/tools/'+encodeURIComponent(toolName)+'/description', { description: newDesc });
+    // Refresh the page to reflect changes
+    var d = await api('/dashboard/engine/mcp');
+    if(d.status==='ok') await renderMcpPage(document.getElementById('pageContent'), d.data);
+  } catch(e) {
+    console.error('edit desc failed', e);
+    alert('保存失败: ' + e.message);
+  }
+};
+
+// ─── 系统工具页面 ───
+window.renderToolsPage = async function(el, data){
+  if(!data){ el.innerHTML='<div class="card"><div class="loading">无数据</div></div>'; return; }
+  const categories=data.工具分类||[];
+  const total=data.工具总数||0;
+  let html='<div class="card"><div class="card-hd"><h3>🔧 系统工具</h3></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">'+
+    '<span class="badge-accent" style="background:#4CAF50;color:#fff">工具总数: '+total+'</span>'+
+    '<span class="badge-accent" style="background:#2196F3;color:#fff">分类: '+categories.length+'</span>'+
+    '</div></div>';
+  for(const cat of categories){
+    const catId=cat.category||'';
+    const tools=cat.tools||[];
+    html+='<div class="card" id="cat_'+esc(catId)+'"><div class="card-hd"><h3>📁 '+esc(cat.label||cat.category)+'</h3>'+
+      '<span style="font-size:0.72rem;color:var(--fg2)">'+tools.length+' 个工具'+
+      ' <button class="btn sm" onclick="editCategory(\''+esc(catId)+'\')">✎</button>'+
+      ' <button class="btn sm" style="color:var(--red)" onclick="deleteCategory(\''+esc(catId)+'\')">✕</button>'+
+      '</span></div>';
+    if(tools.length===0){
+      html+='<div style="padding:8px;color:var(--fg2);font-size:0.78rem">该分类暂无工具</div>';
+    }else{
+      html+='<table class="hist-table"><thead><tr><th style="padding-left:4px">工具名</th><th style="padding-left:4px">描述</th><th style="width:75px">操作</th><th style="width:40px">开关</th></tr></thead><tbody>';
+      for(const t of tools){
+        const tid='tog_tool_'+esc(t.name);
+        const desc=t.description||'';
+        const params=t.parameters||{};
+        const propCount=params.properties?Object.keys(params.properties).length:0;
+        const descShort=desc.length>40?desc.substring(0,40)+'…':desc;
+        html+='<tr>'+
+          '<td style="padding-left:4px;font-family:var(--mono);font-size:0.72rem">'+esc(t.name)+'</td>'+
+          '<td style="font-size:0.72rem;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(desc)+'">'+
+          esc(descShort)+'</td>'+
+          '<td style="text-align:center;white-space:nowrap"><button class="btn sm" style="color:var(--blue);padding:1px 4px;font-size:0.65rem"'+
+          ' onclick="editTool(\''+esc(catId)+'\',\''+esc(t.name)+'\')">✎</button><button class="btn sm" style="color:var(--red);padding:1px 4px;font-size:0.65rem;margin-left:2px" onclick="deleteTool(\''+esc(catId)+'\',\''+esc(t.name)+'\')">✕</button></td>'+
+          '<td style="text-align:center;padding-left:2px">'+
+          '<label class="toggle"><input type="checkbox" id="'+tid+'" '+(t.enabled?'checked':'')+
+          ' onchange="toggleTool(\''+esc(t.name)+'\',this.checked)"><span class="sl"></span></label></td></tr>';
+      }
+      html+='</tbody></table>';
+    }
+    // 添加工具输入
+    html+='<div style="display:flex;gap:4px;margin-top:6px">'+
+      '<input id="toolInput_'+esc(catId)+'" class="full-input" placeholder="工具名" style="flex:1;margin:0;font-family:var(--mono);font-size:0.75rem;padding:4px 8px">'+
+      '<input id="toolDesc_'+esc(catId)+'" class="full-input" placeholder="描述（选填）" style="flex:1.5;margin:0;font-size:0.75rem;padding:4px 8px">'+
+      '<button class="btn sm" onclick="addTool(\''+esc(catId)+'\')">+ 工具</button></div>';
+    html+='</div>';
+  }
+  // 添加分类
+  html+='<div class="card"><div class="card-hd"><h3>➕ 添加分类</h3></div>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
+    '<input id="newCatId" class="full-input" placeholder="分类标识 (如 ai)" style="flex:1;min-width:120px;margin:0;font-family:var(--mono);font-size:0.78rem;padding:5px 8px">'+
+    '<input id="newCatLabel" class="full-input" placeholder="显示名称 (如 AI 工具)" style="flex:1.5;min-width:140px;margin:0;font-size:0.78rem;padding:5px 8px">'+
+    '<button class="btn accent sm" onclick="createCategory()">创建</button></div></div>'+
+    '<div style="text-align:right;color:var(--fg3);font-size:0.72rem;padding:4px 0 10px 0">tools 模块 v'+(data.版本||data.version||'0.2.0')+'</div>';
+  el.innerHTML=html;
+};
+
+// 工具开关 API
+window.toggleTool = async function(name, enabled){
+  try{
+    await apiPost('/dashboard/engine/tools/toggle', {name: name, enabled: enabled});
+  }catch(e){
+    console.error('toggle tool failed', e);
+    const cb=document.getElementById('tog_tool_'+name);
+    if(cb) cb.checked=!enabled;
+  }
+};
+
+
+// 编辑工具弹窗
+window.editTool = async function(catId,toolName){
+  try{
+    const data=await api('/dashboard/engine/tools');
+    const categories=data.data?data.data.工具分类:(data.工具分类||[]);
+    let toolData=null;
+    for(const cat of categories){
+      if(cat.category===catId){
+        for(const t of cat.tools||[]){
+          if(t.name===toolName){toolData=t;break;}
+        }
+        break;
+      }
+    }
+    if(!toolData){alert('找不到工具数据');return;}
+    const overlay=document.createElement('div');
+    overlay.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    const box=document.createElement('div');
+    box.style.cssText='background:var(--bg2);border-radius:8px;padding:20px;min-width:420px;max-width:560px;box-shadow:0 4px 20px rgba(0,0,0,0.3)';
+    const paramsStr=toolData.parameters?JSON.stringify(toolData.parameters,null,2):'{}';
+    box.innerHTML='<h3 style="margin:0 0 12px 0">编辑工具: '+esc(toolData.name)+'</h3>'+
+      '<div style="margin-bottom:10px"><label style="display:block;font-size:0.72rem;color:var(--fg2);margin-bottom:3px">工具名</label>'+
+      '<input id="editToolName" class="full-input" value="'+esc(toolData.name)+'" style="font-family:var(--mono);font-size:0.78rem;padding:5px 8px"></div>'+
+      '<div style="margin-bottom:10px"><label style="display:block;font-size:0.72rem;color:var(--fg2);margin-bottom:3px">描述</label>'+
+      '<input id="editToolDesc" class="full-input" value="'+esc(toolData.description||'')+'" style="font-size:0.78rem;padding:5px 8px"></div>'+
+      '<div style="margin-bottom:10px"><label style="display:block;font-size:0.72rem;color:var(--fg2);margin-bottom:3px">参数 (JSON)</label>'+
+      '<textarea id="editToolParams" style="width:100%;min-height:100px;font-family:var(--mono);font-size:0.7rem;padding:5px 8px;border:1px solid var(--bd);border-radius:4px;resize:vertical;background:var(--bg);color:var(--fg)">'+esc(paramsStr)+'</textarea></div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'+
+      '<button class="btn" id="editCancelBtn">取消</button>'+
+      '<button class="btn accent" id="editToolSaveBtn">保存</button></div>';
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    document.getElementById('editToolSaveBtn').onclick=async function(){
+      const newName=document.getElementById('editToolName').value.trim();
+      const newDesc=document.getElementById('editToolDesc').value.trim();
+      let newParams='';
+      try{
+        const p=document.getElementById('editToolParams').value.trim();
+        if(p){JSON.parse(p);newParams=p;}
+      }catch(e){alert('参数 JSON 格式有误');return;}
+      if(!newName){alert('工具名不能为空');return;}
+      try{
+        const r=await apiPost('/dashboard/engine/tools/admin',{action:'update_tool',category_id:catId,tool:toolName,tool_new_name:newName,tool_description:newDesc,tool_parameters:newParams});
+        if(r.status==='ok'){overlay.remove();refreshToolsPage();}
+        else{alert(r.error||'保存失败');}
+      }catch(e){alert('网络错误');}
+    };
+    document.getElementById('editCancelBtn').onclick=function(){overlay.remove();};
+  }catch(e){alert('获取工具数据失败');}
+};
+
+// CRUD 辅助：刷新系统工具页面
+function refreshToolsPage(){
+  const el=document.getElementById('pageContent');
+  if(!el)return;
+  const scroller=document.querySelector('.content');
+  const savedTop=scroller?scroller.scrollTop:0;
+  el.innerHTML='<div class="loading">刷新中...</div>';
+  api('/dashboard/engine/tools').then(function(d){
+    if(d.status==='ok'){
+      window.renderToolsPage(el,d);
+      if(scroller) requestAnimationFrame(function(){scroller.scrollTop=savedTop;});
+    }else{
+      el.innerHTML='<div class="error">刷新失败</div>';
+    }
+  });
+}
+
+// 添加工具
+window.addTool = async function(catId){
+  const inp=document.getElementById('toolInput_'+catId);
+  const descInp=document.getElementById('toolDesc_'+catId);
+  const tool=(inp?inp.value:'').trim();
+  const desc=(descInp?descInp.value:'').trim();
+  if(!tool){alert('请输入工具名');return;}
+  try{
+    const r=await apiPost('/dashboard/engine/tools/admin',{action:'add_tool',category_id:catId,tool:tool,tool_description:desc});
+    if(r.status==='ok'){refreshToolsPage();}
+    else{alert(r.error||'添加失败');}
+  }catch(e){alert('网络错误');}
+};
+
+// 删除工具
+window.deleteTool = async function(catId,toolName){
+  if(!confirm('删除工具 "'+toolName+'" ？'))return;
+  try{
+    const r=await apiPost('/dashboard/engine/tools/admin',{action:'delete_tool',category_id:catId,tool:toolName});
+    if(r.status==='ok'){refreshToolsPage();}
+    else{alert(r.error||'删除失败');}
+  }catch(e){alert('网络错误');}
+};
+
+// 编辑分类
+window.editCategory = async function(catId){
+  const label=prompt('分类 "'+catId+'" 的新显示名称：',catId);
+  if(label===null||label.trim()==='')return;
+  try{
+    const r=await apiPost('/dashboard/engine/tools/admin',{action:'update_category',category_id:catId,category_label:label.trim()});
+    if(r.status==='ok'){refreshToolsPage();}
+    else{alert(r.error||'修改失败');}
+  }catch(e){alert('网络错误');}
+};
+
+// 删除分类
+window.deleteCategory = async function(catId){
+  if(!confirm('确定删除分类 "'+catId+'" 及其所有工具？'))return;
+  try{
+    const r=await apiPost('/dashboard/engine/tools/admin',{action:'delete_category',category_id:catId});
+    if(r.status==='ok'){refreshToolsPage();}
+    else{alert(r.error||'删除失败');}
+  }catch(e){alert('网络错误');}
+};
+
+// 创建分类
+window.createCategory = async function(){
+  const idInp=document.getElementById('newCatId');
+  const labelInp=document.getElementById('newCatLabel');
+  const id=(idInp?idInp.value:'').trim();
+  const label=(labelInp?labelInp.value:'').trim();
+  if(!id){alert('请输入分类标识');return;}
+  try{
+    const r=await apiPost('/dashboard/engine/tools/admin',{action:'create_category',category_id:id,category_label:label||id});
+    if(r.status==='ok'){idInp.value='';if(labelInp)labelInp.value='';refreshToolsPage();}
+    else{alert(r.error||'创建失败');}
+  }catch(e){alert('网络错误');}
+};
+
 </script>
 </body>
 </html>

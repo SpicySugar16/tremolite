@@ -263,10 +263,13 @@ impl DelegationEngine {
         let mut child = Command::new("tremolite")
             .arg("--delegate")
             .arg("--session")
-            .arg(format!("delegate-{}", ctx.goal.chars().take(20).collect::<String>()))
+            .arg(format!(
+                "delegate-{}",
+                ctx.goal.chars().take(20).collect::<String>()
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("spawn tremolite: {e}"))?;
 
@@ -276,6 +279,9 @@ impl DelegationEngine {
             writeln!(stdin, "{json}").map_err(|e| format!("write stdin: {e}"))?;
             stdin.flush().ok();
         }
+        // 关闭 stdin pipe——告诉子进程没有更多输入了
+        // 否则子进程的 read_line 会一直阻塞等待下一个换行符
+        child.stdin.take();
 
         // 读取结果（阻塞一次读取）
         let stdout = child.stdout.take()
@@ -398,9 +404,13 @@ impl DelegationEngine {
 
 // ─── 测试 ────────────────────────────────────
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 单元测试：基础 Shell 委派 ─────────────────
 
     #[test]
     fn test_shell_echo() {
@@ -417,10 +427,114 @@ mod tests {
     #[test]
     fn test_shell_fail() {
         let result = DelegationEngine::spawn_and_wait(
-            DelegateMode::Shell { command: "exit 1".into() },
+            DelegateMode::Shell {
+                command: "exit 1".into(),
+            },
             TaskContext::new("fail test", ""),
             Duration::from_secs(5),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_shell_multi_line_output() {
+        let result = DelegationEngine::spawn_and_wait(
+            DelegateMode::Shell {
+                command: "printf 'line1\\nline2\\nline3'".into(),
+            },
+            TaskContext::new("multi line output", ""),
+            Duration::from_secs(5),
+        );
+        assert!(result.is_ok(), "multi-line failed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("line1"), "missing line1: {output}");
+        assert!(output.contains("line2"), "missing line2: {output}");
+        assert!(output.contains("line3"), "missing line3: {output}");
+    }
+
+    // ── 集成测试：opencode ACP 委派 ─────────
+    // 需要 opencode CLI + DEEPSEEK_API_KEY 环境变量
+    // 运行前执行: source ~/.tremolite/.env
+    // 运行方式: cargo test -- --ignored
+
+    /// 模拟 DelegationModule 的 opencode 路径：shell 模式执行 opencode run
+    #[test]
+    #[ignore]
+    fn test_opencode_echo() {
+        let goal = "echo 'opencode委派测试成功'".to_string();
+        let encoded = goal.replace('"', "\\\"");
+        let command = format!(
+            "opencode run --dangerously-skip-permissions --format json -m deepseek/deepseek-v4-flash \"{encoded}\""
+        );
+        let result = DelegationEngine::spawn_and_wait(
+            DelegateMode::Shell { command },
+            TaskContext::new(&goal, "opencode 集成测试"),
+            Duration::from_secs(120),
+        );
+        assert!(result.is_ok(), "opencode echo failed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("成功"), "response missing success keyword: {output}");
+    }
+
+    /// 测试 opencode 文件创建
+    #[test]
+    #[ignore]
+    fn test_opencode_file_create() {
+        let goal = "echo '透闪石ACP委派文件测试成功' > /tmp/delegate_acp_test.txt".to_string();
+        let encoded = goal.replace('"', "\\\"");
+        let command = format!(
+            "opencode run --dangerously-skip-permissions --format json -m deepseek/deepseek-v4-flash \"{encoded}\""
+        );
+        let result = DelegationEngine::spawn_and_wait(
+            DelegateMode::Shell { command },
+            TaskContext::new("opencode 文件创建测试", ""),
+            Duration::from_secs(120),
+        );
+        assert!(result.is_ok(), "opencode file create failed: {:?}", result);
+    }
+
+    /// 完整链路：模拟 DelegationModule::execute_tool("delegate_task", {mode:"opencode",...})
+    #[test]
+    #[ignore]
+    fn test_full_delegation_opencode_path() {
+        let goal = "请运行bash命令: echo 'delegate_task(opencode)全路径测试通过'".to_string();
+        let encoded_goal = goal.replace('"', "\\\"");
+        let command = format!(
+            "opencode run --dangerously-skip-permissions --format json -m deepseek/deepseek-v4-flash \"{encoded_goal}\""
+        );
+        let ctx = TaskContext::new(&goal, "完整链路测试: 模拟顶级delegate_task工具调用")
+            .with_workdir("/tmp")
+            .with_timeout(120);
+
+        let result = DelegationEngine::spawn_and_wait(
+            DelegateMode::Shell { command },
+            ctx,
+            Duration::from_secs(120),
+        );
+        assert!(result.is_ok(), "full path failed: {:?}", result);
+        let output = result.unwrap();
+        assert!(output.contains("测试通过"), "response missing: {output}");
+    }
+
+    /// Tremolite 子进程委派模式：通过 spawn_tremolite IPC 协议通信
+    /// 测试 tremolite --delegate CLI handler + stdio JSON 行协议
+    /// 需要 `tremolite` 在 PATH 中（含 --delegate handler 的构建）
+    #[test]
+    #[ignore]
+    fn test_tremolite_delegate_ipc() {
+        let goal = "echo 'tremolite-delegate-IPC-链路通畅'".to_string();
+        let ctx = TaskContext::new(&goal, "IPC 全链路测试: tremolite --delegate 协议")
+            .with_workdir("/tmp")
+            .with_timeout(30);
+
+        let result = DelegationEngine::spawn_and_wait(
+            DelegateMode::Tremolite,
+            ctx,
+            Duration::from_secs(60),
+        );
+        assert!(result.is_ok(), "tremolite delegate IPC failed: {:?}", result);
+        let output = result.unwrap();
+        // handle_delegate 从 stdout 取第一行，应该包含 echo 的输出
+        assert!(output.contains("IPC"), "IPC test failure: {output}");
     }
 }

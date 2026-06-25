@@ -636,6 +636,8 @@ pub struct PlanStats {
 
 // ─── 单元测试 ─────────────────────────────────
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use super::*;

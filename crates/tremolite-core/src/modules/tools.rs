@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::any::Any;
+use std::path::PathBuf;
 
 use tremolite_llm::{ToolDefinition, ToolFunction};
 use tremolite_tools::{ToolRegistry, register_all};
@@ -12,9 +13,43 @@ pub struct ToolsModule {
 }
 
 impl ToolsModule {
-    pub fn new() -> Self {
+    pub fn new(config_dir: Option<PathBuf>) -> Self {
         let mut registry = ToolRegistry::new();
         register_all(&mut registry);
+
+        // 如果提供了配置包路径，按 tools.toml 过滤：未列出的工具不注册
+        if let Some(dir) = config_dir {
+            let cfg_path = dir.join("modules").join("tools.toml");
+            if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+                // 解析所有 [[category]] 中的工具名
+                let whitelist: std::collections::HashSet<String> = content.parse::<toml::Value>()
+                    .ok()
+                    .and_then(|v| v.get("category").cloned())
+                    .and_then(|v| v.as_array().cloned())
+                    .map(|arr| {
+                        arr.iter().filter_map(|cat| {
+                            cat.get("tools")
+                                .and_then(|v| v.as_array())
+                                .map(|tools| {
+                                    tools.iter()
+                                        .filter_map(|t| t.as_str().map(String::from))
+                                        .collect::<Vec<_>>()
+                                })
+                        }).flatten().collect()
+                    })
+                    .unwrap_or_default();
+
+                if !whitelist.is_empty() {
+                    let all: Vec<String> = registry.list();
+                    for name in &all {
+                        if !whitelist.contains(name) {
+                            registry.remove(name);
+                        }
+                    }
+                }
+            }
+        }
+
         Self {
             registry,
             registered: false,

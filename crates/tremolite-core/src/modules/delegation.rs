@@ -190,12 +190,23 @@ impl Module for DelegationModule {
 
                 let mode = match mode_str {
                     "tremolite" => DelegateMode::Tremolite,
-                    "opencode" => DelegateMode::AcpTool {
-                        command: command.to_string(),
-                        args: vec!["--acp".into(), "--stdio".into()],
+                    "opencode" => {
+                        // `opencode run` 一次性任务接口
+                        // 用 deepseek 本家（opencode.jsonc 里已配好 provider）
+                        let encoded_goal = goal.replace('"', "\\\"");
+                        DelegateMode::Shell {
+                            command: format!(
+                                "opencode run --dangerously-skip-permissions --format json -m deepseek/deepseek-v4-flash \"{}\"",
+                                encoded_goal
+                            ),
+                        }
                     },
-                    "shell" => DelegateMode::Shell { command: goal.clone() },
-                    _ => DelegateMode::Shell { command: goal.clone() },
+                    "shell" => DelegateMode::Shell {
+                        command: goal.clone(),
+                    },
+                    _ => DelegateMode::Shell {
+                        command: goal.clone(),
+                    },
                 };
 
                 let ctx = TaskContext::new(&goal, &context)
@@ -275,12 +286,23 @@ impl Module for DelegationModule {
                 // 执行任务
                 let mode = match mode_str {
                     "tremolite" => DelegateMode::Tremolite,
-                    "opencode" => DelegateMode::AcpTool {
-                        command: "opencode".into(),
-                        args: vec!["--acp".into(), "--stdio".into()],
+                    "opencode" => {
+                        // `opencode run` 一次性任务接口
+                        // 用 deepseek 本家（opencode.jsonc 里已配好 provider）
+                        let encoded_goal = goal.replace('"', "\\\"");
+                        DelegateMode::Shell {
+                            command: format!(
+                                "opencode run --dangerously-skip-permissions --format json -m deepseek/deepseek-v4-flash \"{}\"",
+                                encoded_goal
+                            ),
+                        }
+                    }
+                    "shell" => DelegateMode::Shell {
+                        command: goal.into(),
                     },
-                    "shell" => DelegateMode::Shell { command: goal.into() },
-                    _ => DelegateMode::Shell { command: goal.into() },
+                    _ => DelegateMode::Shell {
+                        command: goal.into(),
+                    },
                 };
 
                 let ctx = TaskContext::new(goal, context).with_timeout(timeout);
@@ -384,6 +406,28 @@ impl Module for DelegationModule {
         } else {
             None
         }
+    }
+
+    fn prompt_segment(&self) -> Option<String> {
+        Some(
+            "\n## 任务委派能力\n\
+             你可以通过 `delegate_task` 工具将耗时任务委派给外部 agent 执行。\n\
+             \n\
+             ### 委派给 opencode（编程 Agent）\n\
+             当需要编写代码、修改文件、搜索代码库、执行批量操作时，\n\
+             使用 `mode=\"opencode\"` 委派给 opencode。它会独立执行任务并返回结果。\n\
+             \n\
+             适用场景：\n\
+             - 编程任务（写代码、重构、debug）\n\
+             - 文件批量操作\n\
+             - 需要独立推理的复杂任务\n\
+             - 需要长时间运行的任务\n\
+             \n\
+             用法示例：\n\
+             `delegate_task(goal=\"在 src/main.rs 添加一个 hello 函数\", mode=\"opencode\")`\n\
+             如果希望子会话模式（可跨 session 查看进度），使用 `delegate_session`。\n"
+                .to_string(),
+        )
     }
 
     fn as_any(&self) -> Option<&dyn Any> { Some(self) }

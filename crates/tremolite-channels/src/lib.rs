@@ -1528,3 +1528,5 @@ impl Module for ChannelsModule {
         Some(self)
     }
 }
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

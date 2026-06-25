@@ -147,6 +147,9 @@ pub struct McpServerConfig {
     pub prefix: String,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// 环境变量，启动子进程时注入
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 fn default_timeout() -> u64 { 30 }
@@ -235,6 +238,7 @@ impl McpClient {
 
         let child = std::process::Command::new(&command)
             .args(&args)
+            .envs(&self.config.env)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
@@ -394,7 +398,9 @@ impl McpClient {
         let resources = self.discover_resources().unwrap_or_else(|e| { errors.push(e); Vec::new() });
         let prompts = self.discover_prompts().unwrap_or_else(|e| { errors.push(e); Vec::new() });
 
-        if !errors.is_empty() {
+        // 只要工具发现成功，即使资源和提示报错也视为成功
+        //（大部分 MCP 服务器只支持 tools，不支持 resources/prompts）
+        if !errors.is_empty() && tools.is_empty() && resources.is_empty() && prompts.is_empty() {
             return Err(errors);
         }
         Ok((tools, resources, prompts))
@@ -549,6 +555,8 @@ impl McpManager {
 }
 
 // ─── 测试 ────────────────────────────────────
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests {

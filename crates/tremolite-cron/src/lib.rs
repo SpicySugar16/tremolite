@@ -101,3 +101,5 @@ pub fn calc_next_run_at(schedule: &Schedule, now: u64) -> u64 {
         Schedule::CronExpr(_) => now + 60,
     }
 }
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

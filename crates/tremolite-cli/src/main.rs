@@ -43,6 +43,15 @@ fn load_dotenv(path: &std::path::Path) {
 fn main() {
     // ── 0. 解析子命令 ────────────────────────────
     let parsed = cli::parse_args();
+
+    // ── Delegate 快速路径：不启动日志系统 ────────
+    // tracing 默认写 stdout，会污染 IPC 协议的第一行结果
+    // 所以在 tracing 初始化前先拦截 Delegate 模式
+    if matches!(parsed.subcommand, cli::Subcommand::Delegate { .. }) {
+        handle_delegate();
+        return;
+    }
+
     let log_level = &parsed.log_level;
 
     // ── 初始化日志系统 ────────────────────────────
@@ -89,6 +98,10 @@ fn main() {
         }
         cli::Subcommand::Help => {
             cli::print_help();
+            return;
+        }
+        cli::Subcommand::Delegate { .. } => {
+            handle_delegate();
             return;
         }
         _ => {}
@@ -219,7 +232,7 @@ fn main() {
         .with_tone_map(&tm_path, &em_path)));
 
     // 系统工具模块——将内置工具注册到模块系统
-    let tools_module = ToolsModule::new();
+    let tools_module = ToolsModule::new(Some(profile_dir.clone()));
     let tool_count = tools_module.tool_count();
     let _ = engine.register_module(Box::new(tools_module));
     println!("  Tools registered: {} ✓", tool_count);
@@ -336,23 +349,69 @@ fn main() {
         });
     }
 
-    // MCP 模块
+    // MCP 模块——优先从配置包 modules/mcp.toml 加载（支持 stdio/HTTP/SSE），
+    // 无配置包文件时回退到全局 config.toml 的 [mcp] 段（仅 HTTP URL）
     {
-        let mcp_configs: Vec<tremolite_mcp::McpServerConfig> = config.as_ref()
-            .map(|c| c.mcp.servers.iter().map(|s| {
-                use tremolite_mcp::{TransportConfig, McpServerConfig};
-                McpServerConfig {
-                    name: s.name.clone(),
-                    transport: TransportConfig::Http { url: s.url.clone() },
-                    prefix: s.prefix.clone(),
-                    timeout_secs: s.timeout_secs,
-                }
-            }).collect())
-            .unwrap_or_default();
+        use tremolite_mcp::{TransportConfig, McpServerConfig};
+        let mcp_configs: Vec<McpServerConfig> = {
+            let module_mcp_path = profile_dir.join("modules").join("mcp.toml");
+            if module_mcp_path.exists() {
+                // 从配置包加载——支持 transport/command/args 等完整字段
+                let content = std::fs::read_to_string(&module_mcp_path).unwrap_or_default();
+                let parsed: toml::Value = content.parse().unwrap_or(toml::Value::Table(toml::map::Map::new()));
+                parsed.get("mcp")
+                    .and_then(|m| m.get("servers"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter().filter_map(|entry| {
+                            let name = entry.get("name")?.as_str()?.to_string();
+                            let transport_str = entry.get("transport").and_then(|t| t.as_str()).unwrap_or("http");
+                            let prefix = entry.get("prefix").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                            let timeout_secs = entry.get("timeout_secs").and_then(|t| t.as_integer()).unwrap_or(30) as u64;
+                            let transport = match transport_str {
+                                "stdio" => {
+                                    let command = entry.get("command")?.as_str()?.to_string();
+                                    let args: Vec<String> = entry.get("args")
+                                        .and_then(|a| a.as_array())
+                                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                        .unwrap_or_default();
+                                    TransportConfig::Stdio { command, args }
+                                }
+                                "sse" => {
+                                    let url = entry.get("url")?.as_str()?.to_string();
+                                    TransportConfig::Sse { url }
+                                }
+                                _ => {
+                                    let url = entry.get("url").or_else(|| entry.get("command"))
+                                        .and_then(|v| v.as_str())?.to_string();
+                                    TransportConfig::Http { url }
+                                }
+                            };
+                            Some(McpServerConfig { name, transport, prefix, timeout_secs, env: std::collections::HashMap::new() })
+                        }).collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                // 回退到全局 config.toml 的 [mcp] 段（仅 HTTP URL）
+                config.as_ref()
+                    .map(|c| c.mcp.servers.iter().map(|s| {
+                        McpServerConfig {
+                            name: s.name.clone(),
+                            transport: TransportConfig::Http { url: s.url.clone() },
+                            prefix: s.prefix.clone(),
+                            timeout_secs: s.timeout_secs,
+                            env: std::collections::HashMap::new(),
+                        }
+                    }).collect())
+                    .unwrap_or_default()
+            }
+        };
         if mcp_configs.is_empty() {
-            let _ = engine.register_module(Box::new(McpModule::new()));
+            let _ = engine.register_module(Box::new(McpModule::new().with_cache_path(profile_dir.join("..").join("..").join("data").join("mcp_discovered.json"))));
         } else {
-            let _ = engine.register_module(Box::new(McpModule::with_config(McpModule::new(), mcp_configs)));
+            tracing::info!("mcp: loading {} server(s) from profile module config", mcp_configs.len());
+            let mcp_cache_path = profile_dir.join("..").join("..").join("data").join("mcp_discovered.json");
+            let _ = engine.register_module(Box::new(McpModule::with_config(McpModule::new(), mcp_configs).with_cache_path(mcp_cache_path)));
         }
     }
     // Webhook 模块——外部事件监听与自动化流水线
@@ -444,7 +503,12 @@ fn main() {
         }
     }
 
-    // ── 7. 启动 ─────────────────────────────────
+    // ── 7. 广播 Startup 事件——通知所有模块完成初始化 ──
+    use tremolite_core::Event;
+    let startup_ctx = tremolite_core::EventContext::with_session(engine.modules.handle(), engine.session_id.clone());
+    let _ = engine.modules.broadcast(&Event::Startup, &startup_ctx);
+
+    // ── 8. 启动 ─────────────────────────────────
     match parsed.subcommand {
         cli::Subcommand::Run => {
             println!();
@@ -549,7 +613,7 @@ fn handle_plan(action: &str, _args: &[String], config: Option<&Config>) {
 }
 
 fn handle_tool(action: &str, _args: &[String]) {
-    let tools = ToolsModule::new();
+    let tools = ToolsModule::new(None);
 
     match action {
         "list" | "" => {
@@ -659,7 +723,7 @@ fn handle_health(config: Option<&Config>) {
     println!("  Data dir:   {} {}", data_dir.display(), if data_ok { "✓" } else { "✗" });
 
     // 工具
-    let tools = ToolsModule::new();
+    let tools = ToolsModule::new(None);
     println!("  Tools:      {} registered", tools.tool_count());
 
     // 技能目录
@@ -754,6 +818,60 @@ const LEAP_MONTH_DAYS: [i64; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 
 
 fn is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
+// ─── Delegate 模式 ─────────────────────────────
+
+/// `tremolite --delegate` 快速路径：读 stdin JSON → 执行 shell → 输出结果
+fn handle_delegate() {
+    use std::io::{self, BufRead};
+    use tremolite_delegation::TaskContext;
+
+    // 1. 读一行 stdin
+    let mut line = String::new();
+    let stdin = io::stdin();
+    let mut locked = stdin.lock();
+    if locked.read_line(&mut line).map_err(|e| e.to_string()).is_err() || line.trim().is_empty() {
+        eprintln!("delegate: no input on stdin");
+        std::process::exit(1);
+    }
+
+    // 2. 解析 TaskContext
+    let ctx: TaskContext = match serde_json::from_str(line.trim()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("delegate: failed to parse TaskContext: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // 3. 执行 goal 作为 shell 命令
+    let output = match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&ctx.goal)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("delegate: shell exec failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // 4. 输出第一行结果到 stdout
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if output.status.success() {
+        // 取第一行
+        let result_line = stdout.lines().next().unwrap_or("");
+        println!("{}", result_line);
+    } else {
+        let msg = if stderr.is_empty() { &stdout } else { &stderr };
+        let first = msg.lines().next().unwrap_or("unknown error");
+        eprintln!("delegate: exit={} {}", output.status.code().unwrap_or(-1), first);
+        std::process::exit(1);
+    }
 }
 
 // ─── 模块管理 ─────────────────────────────────

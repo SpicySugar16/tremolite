@@ -238,6 +238,8 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[cfg(test)]
 mod tests {
     use super::*;
