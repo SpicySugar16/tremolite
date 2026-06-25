@@ -96,6 +96,7 @@ pub enum Event {
     OnMessage {
         input: String,
         channel: String,
+        sender: String,
     },
 
     /// 构建系统提示词阶段

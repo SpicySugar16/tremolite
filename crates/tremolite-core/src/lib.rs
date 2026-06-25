@@ -30,6 +30,7 @@ pub use modules::delegation::DelegationModule;
 pub use modules::cron::CronModule;
 #[doc(hidden)]
 pub use modules::mcp::McpModule;
+pub use modules::user::UserModule;
 #[doc(hidden)]
 pub use modules::tools::ToolsModule;
 #[doc(hidden)]

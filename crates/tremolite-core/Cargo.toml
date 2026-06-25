@@ -24,6 +24,7 @@ tremolite-session = { path = "../tremolite-session" }
 tremolite-delegation = { path = "../tremolite-delegation" }
 tremolite-mcp = { path = "../tremolite-mcp" }
 tremolite-cron = { path = "../tremolite-cron" }
+tremolite-user = { path = "../tremolite-user" }
 rand = { workspace = true }
 chrono.workspace = true
 toml = "0.8"

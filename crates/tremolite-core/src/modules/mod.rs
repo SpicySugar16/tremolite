@@ -9,3 +9,4 @@ pub mod skill;
 pub mod tools;
 pub mod webhook;
 pub mod session;
+pub mod user;

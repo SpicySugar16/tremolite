@@ -21,6 +21,7 @@ members = [
     "crates/tremolite-delegation",
     "crates/tremolite-mcp",
     "crates/tremolite-compress",
+    "crates/tremolite-user",
     "crates/tremolite-packaging",
 ]
 resolver = "2"

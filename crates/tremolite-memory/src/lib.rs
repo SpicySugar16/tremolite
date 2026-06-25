@@ -53,6 +53,7 @@ pub struct MemoryEntry {
     pub tags: Vec<String>,
     pub importance: f64,     // 0.0 ~ 1.0，由代谢引擎打分
     pub source: String,      // 来源通道
+    pub user_id: String,     // 用户身份标识
 }
 
 impl MemoryEntry {
@@ -68,6 +69,7 @@ impl MemoryEntry {
             tags: Vec::new(),
             importance: 0.5,
             source,
+            user_id: String::new(),  // 默认空，由调用方设置
         }
     }
 
@@ -279,6 +281,7 @@ impl L2ProfileMemory {
             tags,
             importance,
             source: String::new(),
+            user_id: String::new(),
         };
 
         // LFU：如果 key 已存在，继承访问计数
@@ -802,6 +805,7 @@ impl DiskColdArchive {
                     tags: Vec::new(),
                     importance: 0.0,
                     source: String::new(),
+                    user_id: String::new(),
                 });
             }
         }
@@ -1491,7 +1495,7 @@ impl MemoryManager {
     }
 
     /// 核心写入接口：存一条新记忆
-    pub fn remember(&mut self, session_id: &str, content: String, mut tags: Vec<String>, importance: f64, source: String) -> u64 {
+    pub fn remember(&mut self, session_id: &str, content: String, mut tags: Vec<String>, importance: f64, source: String, user_id: String) -> u64 {
         // 轻量画像检测——内容匹配画像关键词时自动加 profile 标签
         if !tags.contains(&"profile".to_string()) && is_profile_related(&content) {
             tags.push("profile".into());
@@ -1510,6 +1514,7 @@ impl MemoryManager {
             tags: tags.clone(),
             importance,
             source,
+            user_id,
         };
 
         // 写入 L1（工作记忆）

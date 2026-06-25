@@ -211,7 +211,7 @@ impl Module for ProcessModule {
                 self.stop();
                 return Ok(EventResponse::Pass);
             }
-            Event::OnMessage { input, channel } => {
+            Event::OnMessage { input, channel, .. } => {
                 ("on_message", serde_json::json!({ "input": input, "channel": channel }))
             }
             Event::BuildPrompt => ("build_prompt", Value::Null),

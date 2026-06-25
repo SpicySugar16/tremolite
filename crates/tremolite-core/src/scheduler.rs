@@ -187,6 +187,7 @@ impl SessionWorker {
             let _ = self.modules.broadcast(&Event::OnMessage {
                 input: input.clone(),
                 channel: channel.clone(),
+                sender: sender.clone(),
             }, &ctx);
             tracing::debug!("scheduler: OnMessage broadcast complete");
 
@@ -248,6 +249,23 @@ impl SessionWorker {
 
         let mut prompt_parts = vec![self.base_soul.clone()];
         prompt_parts.extend(module_segments);
+
+        // 注入当前 session 的用户画像
+        let user_profile = self.modules.with_module_mut("user", |m| {
+            m.as_any_mut()
+                .and_then(|any| any.downcast_mut::<crate::modules::user::UserModule>())
+                .and_then(|um| {
+                    let summary = um.profile_summary(&self.session_id);
+                    if let Some(ref s) = summary {
+                        um.last_injected = s.clone();
+                    }
+                    summary
+                })
+        }).unwrap_or_default();
+        if let Some(profile) = &user_profile {
+            prompt_parts.push(profile.clone());
+        }
+
         let full_prompt = prompt_parts.join("\n\n");
         self.prompt_builder.set_system_prompt(&full_prompt);
 
@@ -405,7 +423,7 @@ impl SessionWorker {
                             &self.session_id,
                             format!("[session_title] {}", name),
                             vec!["meta".into(), "title".into()],
-                            0.9, "system".into(),
+                            0.9, "system".into(), String::new(),
                         );
                     }
                 });

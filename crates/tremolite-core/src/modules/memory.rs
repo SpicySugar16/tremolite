@@ -264,7 +264,7 @@ impl Module for MemoryModule {
                             &ctx.session_id,
                             format!("[session_start] 已知用户，画像碎片：{}", truncated),
                             vec!["system".into(), "session_start".into(), tag],
-                            0.3, "internal".into(),
+                            0.3, "internal".into(), String::new(),
                         );
                     }
                 }
@@ -272,12 +272,12 @@ impl Module for MemoryModule {
                 tracing::info!("memory: startup complete (has_profile={})", has_profile);
                 Ok(EventResponse::Pass)
             }
-            Event::OnMessage { input, channel } => {
+            Event::OnMessage { input, channel, sender } => {
                 self.manager.remember(
                     &ctx.session_id,
                     format!("{}: {}", self.username, input),
                     vec![format!("channel:{}", channel), tag],
-                    0.6, channel.clone(),
+                    0.6, channel.clone(), sender.clone(),
                 );
                 let _ = self.manager.flush_all();
                 Ok(EventResponse::Pass)
@@ -286,7 +286,7 @@ impl Module for MemoryModule {
                 self.manager.remember(
                     &ctx.session_id,
                     format!("{}: {}", self.ai_name, response),
-                    vec!["response".into(), tag], 0.5, "internal".into(),
+                    vec!["response".into(), tag], 0.5, "internal".into(), String::new(),
                 );
                 let _ = self.manager.flush_all();
                 Ok(EventResponse::Pass)

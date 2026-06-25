@@ -270,14 +270,14 @@ impl Module for DelegationModule {
                             &sub_sid,
                             format!("[delegate_start] 目标: {}", goal),
                             vec!["delegate".into(), "session_start".into()],
-                            0.6, "delegation".into(),
+                            0.6, "delegation".into(), String::new(),
                         );
                         if !context.is_empty() {
                             mm.manager_mut().remember(
                                 &sub_sid,
                                 format!("[delegate_context] {}", context),
                                 vec!["delegate".into(), "context".into()],
-                                0.5, "delegation".into(),
+                                0.5, "delegation".into(), String::new(),
                             );
                         }
                     }
@@ -355,7 +355,7 @@ impl Module for DelegationModule {
                             &sub_sid,
                             format!("[delegate_result] {}", task_result),
                             vec!["delegate".into(), "result".into()],
-                            0.7, "delegation".into(),
+                            0.7, "delegation".into(), String::new(),
                         );
                     }
                 });

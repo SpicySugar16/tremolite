@@ -187,6 +187,11 @@ async fn run_server_inner(
         .route("/dashboard/plan/{id}/update", post(handle_plan_update))
         .route("/dashboard/plan/{id}/delete", post(handle_plan_delete))
         .route("/dashboard/plan/{id}/activate", post(handle_plan_activate))
+        // ─── 用户画像 CRUD ────────────────────
+        .route("/dashboard/user/{uid}", get(handle_user_get))
+        .route("/dashboard/user/create", post(handle_user_create))
+        .route("/dashboard/user/{uid}/update", post(handle_user_update))
+        .route("/dashboard/user/{uid}/delete", post(handle_user_delete))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -711,7 +716,18 @@ async fn handle_dashboard_status(
         b_active.cmp(&a_active)
     });
 
+    // 获取 UserModule 的上次注入内容
+    let user_injected = state.modules.as_ref()
+        .and_then(|mods| mods.with_module("user", |m| {
+            m.as_any()
+                .and_then(|any| any.downcast_ref::<tremolite_core::UserModule>())
+                .map(|um| um.last_injected.clone())
+        }))
+        .flatten()
+        .unwrap_or_default();
+
     Json(serde_json::json!({
+        "user_injected": user_injected,
         "status": "ok",
         "system": {
             "status": "ok",
@@ -1509,13 +1525,76 @@ async fn handle_engine_mod(
                 "版本": LEARN_VERSION,
             })
         }
-        "reflection" => serde_json::json!({
-            "反思周期": "3600s",
-            "最近反思": "无",
-            "画像评分": "—",
-            "状态": "待机中",
-            "版本": REFLECTION_VERSION,
-        }),
+        "reflection" => {
+            let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
+            let config_path = profile_dir.join("modules").join("reflection.toml");
+
+            let mut trigger_interval = 20i64;
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(toml_val) = content.parse::<toml::Value>() {
+                    if let Some(cfg) = toml_val.get("reflection") {
+                        trigger_interval = cfg.get("trigger_interval")
+                            .and_then(|v| v.as_integer())
+                            .unwrap_or(20);
+                    }
+                }
+            }
+
+            let l2_path = tremolite_dir.join("data").join("l2_profile.json");
+            let l2_json = std::fs::read_to_string(&l2_path).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .unwrap_or(serde_json::json!({}));
+
+            let dialectic_keys: Vec<String> = l2_json.as_object()
+                .map(|obj| {
+                    let mut keys: Vec<String> = obj.keys()
+                        .filter(|k| k.contains("dialectic:"))
+                        .cloned()
+                        .collect();
+                    keys.sort();
+                    keys
+                })
+                .unwrap_or_default();
+
+            let count = dialectic_keys.len();
+
+            let recent_dialectics: Vec<serde_json::Value> = dialectic_keys.iter()
+                .rev()
+                .take(3)
+                .filter_map(|k| {
+                    l2_json.get(k).map(|entry| {
+                        let content = entry.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                        let tags = entry.get("tags").and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        let summary = if tags.is_empty() {
+                            content.chars().take(120).collect::<String>()
+                        } else {
+                            format!("[{}] {}", tags.join(", "), content.chars().take(100).collect::<String>())
+                        };
+                        serde_json::json!({
+                            "time": k.strip_prefix("dialectic:").unwrap_or(k),
+                            "summary": summary,
+                        })
+                    })
+                })
+                .collect();
+
+            let profile_path = tremolite_dir.join("data").join("memory").join("profile.json");
+            let profile_summary = std::fs::read_to_string(&profile_path).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| v.get("summary").and_then(|s| s.as_str().map(|s| s.to_string())))
+                .unwrap_or_else(|| "简要画像".to_string());
+
+            serde_json::json!({
+                "trigger_interval": trigger_interval,
+                "dialectic_count": count,
+                "recent_dialectics": recent_dialectics,
+                "profile_summary": profile_summary,
+                "配置来源": config_path.to_string_lossy().to_string(),
+                "版本": REFLECTION_VERSION,
+            })
+        },
         "compress" => {
             let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
             let config_path = profile_dir.join("modules").join("compress.toml");
@@ -1705,63 +1784,49 @@ async fn handle_engine_mod(
             })
         }
         "user" => {
-            // 读 config.toml 提取 [user] 段的账户信息
-            let config_str = std::fs::read_to_string(tremolite_dir.join("config.toml")).ok().unwrap_or_default();
+            let profile_dir = tremolite_dir.join("profiles").join(&state.profile_name);
+            let users_dir = profile_dir.join("users");
             let mut admins = Vec::new();
-            let mut users = Vec::new();
-            let mut in_user_accounts = false;
-            let mut current_acct: Option<serde_json::Map<String, serde_json::Value>> = None;
-            for line in config_str.lines() {
-                let trimmed = line.trim();
-                if trimmed == "[[user.accounts]]" {
-                    in_user_accounts = true;
-                    if let Some(acct) = current_acct.take() {
-                        let role = acct.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                        if role == "admin" { admins.push(serde_json::Value::Object(acct)); }
-                        else { users.push(serde_json::Value::Object(acct)); }
-                    }
-                    current_acct = Some(serde_json::Map::new());
-                    continue;
-                }
-                if in_user_accounts {
-                    if trimmed.starts_with('[') { break; }  // 遇到其他段头就停止
-                    if let Some(eq_pos) = trimmed.find('=') {
-                        let key = trimmed[..eq_pos].trim().to_string();
-                        let val = trimmed[eq_pos+1..].trim().trim_matches('\"').to_string();
-                        if let Some(ref mut acct) = current_acct {
-                            acct.insert(key, serde_json::Value::String(val));
+            let mut regulars = Vec::new();
+            let mut total = 0u64;
+
+            if let Ok(entries) = std::fs::read_dir(&users_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("toml") { continue; }
+                    let uid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(val) = content.parse::<toml::Value>() {
+                            let display_name = val.get("display_name").and_then(|v| v.as_str())
+                                .or_else(|| val.get("name").and_then(|v| v.as_str()))
+                                .unwrap_or(&uid).to_string();
+                            let role = val.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                            let qq = val.get("qq").and_then(|v| v.as_str()).unwrap_or("");
+                            let account_name = val.get("account_name").and_then(|v| v.as_str()).unwrap_or("");
+                            let entry = serde_json::json!({
+                                "uid": uid,
+                                "display_name": display_name,
+                                "role": role,
+                                "qq": qq,
+                                "account_name": account_name,
+                            });
+                            if role == "admin" { admins.push(entry); }
+                            else { regulars.push(entry); }
+                            total += 1;
                         }
                     }
                 }
             }
-            // Push last account
-            if let Some(acct) = current_acct.take() {
-                let role = acct.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                if role == "admin" { admins.push(serde_json::Value::Object(acct)); }
-                else { users.push(serde_json::Value::Object(acct)); }
-            }
-            // If no [user] section, fall back to env USER
-            if admins.is_empty() && users.is_empty() {
-                let display_name = std::env::var("USER").unwrap_or_default();
-                serde_json::json!({
-                    "注册用户数": 1,
-                    "管理员账户": 1,
-                    "当前对话用户": display_name,
-                    "用户角色": "Admin",
-                    "主动识别": "已启用（通过 alias 自动匹配）",
-                    "版本": tremolite_core::CORE_VERSION,
-                })
-            } else {
-                serde_json::json!({
-                    "注册用户数": admins.len() + users.len(),
-                    "管理员账户": admins.len(),
-                    "普通用户": users.len(),
-                    "管理员列表": admins,
-                    "普通用户列表": users,
-                    "主动识别": "已启用（通过 alias 自动匹配）",
-                    "版本": tremolite_core::CORE_VERSION,
-                })
-            }
+
+            serde_json::json!({
+                "注册用户数": total,
+                "管理员账户": admins.len(),
+                "普通用户": regulars.len(),
+                "管理员列表": admins,
+                "普通用户列表": regulars,
+                "配置包": users_dir.to_string_lossy().to_string(),
+                "版本": tremolite_core::CORE_VERSION,
+            })
         }
         "mcp" => {
             let mcp_path = tremolite_dir.join("data").join("mcp_discovered.json");
@@ -3112,6 +3177,118 @@ async fn handle_plan_settings_set(
     });
     write_plan_config(&home, &config);
     Json(serde_json::json!({"status": "ok"}))
+}
+
+// ─── 用户画像 CRUD handler ────────────────────
+
+/// GET /dashboard/user/{uid} — 读取单个用户的完整 TOML 画像
+async fn handle_user_get(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(uid): Path<String>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("users")
+        .join(format!("{}.toml", uid));
+
+    if !path.exists() {
+        return Json(serde_json::json!({"status": "error", "message": "用户不存在"}));
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Json(serde_json::json!({
+            "status": "ok",
+            "uid": uid,
+            "toml_content": content,
+        })),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("读取失败: {}", e)})),
+    }
+}
+
+/// POST /dashboard/user/create — 新建用户
+async fn handle_user_create(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let uid = payload.get("uid").and_then(|v| v.as_str()).unwrap_or("");
+    let toml_content = payload.get("toml_content").and_then(|v| v.as_str()).unwrap_or("");
+
+    if uid.is_empty() || toml_content.is_empty() {
+        return Json(serde_json::json!({"status": "error", "message": "缺少 uid 或 toml_content"}));
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("users")
+        .join(format!("{}.toml", uid));
+
+    if path.exists() {
+        return Json(serde_json::json!({"status": "error", "message": "用户已存在"}));
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    match std::fs::write(&path, toml_content) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "message": "创建成功"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("写入失败: {}", e)})),
+    }
+}
+
+/// POST /dashboard/user/{uid}/update — 更新用户 TOML 画像
+async fn handle_user_update(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(uid): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let toml_content = payload.get("toml_content").and_then(|v| v.as_str()).unwrap_or("");
+
+    if toml_content.is_empty() {
+        return Json(serde_json::json!({"status": "error", "message": "缺少 toml_content"}));
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("users")
+        .join(format!("{}.toml", uid));
+
+    if !path.exists() {
+        return Json(serde_json::json!({"status": "error", "message": "用户不存在"}));
+    }
+
+    match std::fs::write(&path, toml_content) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "message": "更新成功"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("写入失败: {}", e)})),
+    }
+}
+
+/// POST /dashboard/user/{uid}/delete — 删除用户
+async fn handle_user_delete(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(uid): Path<String>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("users")
+        .join(format!("{}.toml", uid));
+
+    if !path.exists() {
+        return Json(serde_json::json!({"status": "error", "message": "用户不存在"}));
+    }
+
+    match std::fs::remove_file(&path) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "message": "删除成功"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("删除失败: {}", e)})),
+    }
 }
 
 async fn handle_config_check() -> Json<serde_json::Value> {

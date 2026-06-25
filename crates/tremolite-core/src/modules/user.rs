@@ -53,12 +53,15 @@ fn extract_traits(input: &str) -> Vec<(String, String)> {
 
 pub struct UserModule {
     pub registry: UserRegistry,
+    /// 上次注入到 prompt 的画像内容
+    pub last_injected: String,
 }
 
 impl UserModule {
     pub fn new() -> Self {
         Self {
             registry: UserRegistry::new(),
+            last_injected: String::new(),
         }
     }
 
@@ -242,7 +245,7 @@ impl Module for UserModule {
         ctx: &EventContext,
     ) -> Result<EventResponse, ModuleError> {
         match event {
-            Event::OnMessage { ref input, ref channel } => {
+            Event::OnMessage { ref input, ref channel, .. } => {
                 let session_id = if ctx.session_id.is_empty() { "default" } else { &ctx.session_id };
                 let channel_uid = session_id; // 用 session_id 作为 channel_uid
                 let uid = self.auto_identify(session_id, channel, channel_uid);

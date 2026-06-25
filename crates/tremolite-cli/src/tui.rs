@@ -401,6 +401,7 @@ fn process_tui_message(engine: &mut TremoliteEngine, input: &str) -> String {
         &tremolite_core::Event::OnMessage {
             input: input.to_string(),
             channel: channel.to_string(),
+            sender: String::new(),
         },
         &ctx,
     );

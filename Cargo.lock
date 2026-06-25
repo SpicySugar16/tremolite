@@ -3078,6 +3078,7 @@ dependencies = [
  "tremolite-plugin",
  "tremolite-session",
  "tremolite-tools",
+ "tremolite-user",
 ]
 
 [[package]]
@@ -3285,6 +3286,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "ureq 2.12.1",
+]
+
+[[package]]
+name = "tremolite-user"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

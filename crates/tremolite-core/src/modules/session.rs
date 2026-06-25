@@ -592,7 +592,7 @@ impl Module for SessionModule {
                 tracing::info!("session: shutdown, closed and saved {} sessions", self.manager.count());
                 Ok(EventResponse::Pass)
             }
-            Event::OnMessage { ref input, ref channel } => {
+            Event::OnMessage { ref input, ref channel, .. } => {
                 let sid = if ctx.session_id.is_empty() {
                     "default"
                 } else {

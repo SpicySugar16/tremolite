@@ -538,6 +538,7 @@ impl Module for CompressModule {
                             tags: Vec::new(),
                             importance: 0.0,
                             source: String::new(),
+                            user_id: String::new(),
                         })
                     })
                     .collect();

@@ -189,6 +189,7 @@ async function renderContent(){
       else await renderProfiles(el,statusData);
     break;
     case 'module': await renderModule(el,currentParam,statusData);break;
+    case 'user-detail': await renderUserDetailPage(el,currentParam);break;
     default: el.innerHTML='<div class="card"><div class="loading">未知页面: '+esc(currentPage)+'</div></div>';
   }
 }
@@ -214,10 +215,11 @@ async function renderStatus(el,d){
     html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDCDA 学习</h3></div>'+
       '<div class="row"><span class="l">技能</span><span class="v">'+(sc.count||0)+'</span></div>'+
       '<div class="row"><span class="l">练习</span><span class="v">'+(sc.total_practices||0)+'</span></div></div>';
-    // Modules card
-    const reg=(mods.registered||[]).map(m=>'<span class="mod active">'+esc(m.label||m.name)+'</span>').join('');
-    html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDD0C 模块</h3></div>'+
-      '<div class="module-list">'+(reg||'<span style="color:var(--fg3)">无</span>')+'</div></div>';
+    // User profile injection card
+    const ui = d.user_injected || '';
+    html+='<div class="card"><div class="card-hd"><h3>👤 用户画像注入</h3></div>'+
+      '<div style="padding:6px 8px;background:var(--bg2);border-radius:var(--radius-sm);font-size:0.72rem;font-family:var(--mono);white-space:pre-wrap;color:var(--fg2)">'+
+      esc(ui || '暂无注入内容')+'</div></div>';
     html+='</div><div class="grid-2">';
     // LLM card
     html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDD17 LLM</h3></div>'+
@@ -1819,6 +1821,9 @@ async function renderModule(el,modId,statusData){
         // 会话管理器引擎模块页 → 借用 hash-route 的 sessions API
         renderSessionsPage(el);
         return;
+      }else if(modId==='reflection'){
+        renderReflectionPage(el);
+        return;
       }else if(modId==='delegation'){
         renderDelegationModule(el);
         return;
@@ -1827,6 +1832,9 @@ async function renderModule(el,modId,statusData){
         return;
       }else if(modId==='tools'){
         renderToolsPage(el,d.data);
+        return;
+      }else if(modId==='user'){
+        renderUserPage(el);
         return;
       }else{
       for(const [k,v] of Object.entries(d)){
@@ -1971,7 +1979,7 @@ function init(){
   window.addEventListener('hashchange',()=>{
     const parts=location.hash.substring(1).split(':');
     currentPage=parts[0]||'status';
-    currentParam=parts[1]||null;
+    currentParam=(parts[1]&&parts[1]!=='')?decodeURIComponent(parts[1]):null;
     renderNav();
     renderContent();
   });
@@ -3346,7 +3354,7 @@ window.renderToolsPage = async function(el, data){
     if(tools.length===0){
       html+='<div style="padding:8px;color:var(--fg2);font-size:0.78rem">该分类暂无工具</div>';
     }else{
-      html+='<table class="hist-table"><thead><tr><th style="padding-left:4px">工具名</th><th style="padding-left:4px">描述</th><th style="width:75px">操作</th><th style="width:40px">开关</th></tr></thead><tbody>';
+      html+='<table class="hist-table"><thead><tr><th style="width:40px">开关</th><th style="padding-left:4px">工具名</th><th style="padding-left:4px">描述</th><th style="width:75px">操作</th></tr></thead><tbody>';
       for(const t of tools){
         const tid='tog_tool_'+esc(t.name);
         const desc=t.description||'';
@@ -3354,14 +3362,14 @@ window.renderToolsPage = async function(el, data){
         const propCount=params.properties?Object.keys(params.properties).length:0;
         const descShort=desc.length>40?desc.substring(0,40)+'…':desc;
         html+='<tr>'+
+          '<td style="text-align:center;padding-left:2px">'+
+          '<label class="toggle"><input type="checkbox" id="'+tid+'" '+(t.enabled?'checked':'')+
+          ' onchange="toggleTool(\''+esc(t.name)+'\',this.checked)"><span class="sl"></span></label></td>'+
           '<td style="padding-left:4px;font-family:var(--mono);font-size:0.72rem">'+esc(t.name)+'</td>'+
           '<td style="font-size:0.72rem;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(desc)+'">'+
           esc(descShort)+'</td>'+
           '<td style="text-align:center;white-space:nowrap"><button class="btn sm" style="color:var(--blue);padding:1px 4px;font-size:0.65rem"'+
-          ' onclick="editTool(\''+esc(catId)+'\',\''+esc(t.name)+'\')">✎</button><button class="btn sm" style="color:var(--red);padding:1px 4px;font-size:0.65rem;margin-left:2px" onclick="deleteTool(\''+esc(catId)+'\',\''+esc(t.name)+'\')">✕</button></td>'+
-          '<td style="text-align:center;padding-left:2px">'+
-          '<label class="toggle"><input type="checkbox" id="'+tid+'" '+(t.enabled?'checked':'')+
-          ' onchange="toggleTool(\''+esc(t.name)+'\',this.checked)"><span class="sl"></span></label></td></tr>';
+          ' onclick="editTool(\''+esc(catId)+'\',\''+esc(t.name)+'\')">✎</button><button class="btn sm" style="color:var(--red);padding:1px 4px;font-size:0.65rem;margin-left:2px" onclick="deleteTool(\''+esc(catId)+'\',\''+esc(t.name)+'\')">✕</button></td></tr>';
       }
       html+='</tbody></table>';
     }
@@ -3520,6 +3528,252 @@ window.createCategory = async function(){
     else{alert(r.error||'创建失败');}
   }catch(e){alert('网络错误');}
 };
+
+// ─── Reflection Module Page ────
+async function renderReflectionPage(el){
+  el.innerHTML='<div class="card"><div class="card-hd"><h3>◉ reflection</h3></div><div class="loading">加载中...</div></div>';
+  try{
+    const r=await api('/dashboard/engine/reflection');
+    const d=r.data||r;
+    let html='';
+
+    // 顶部双栏
+    html+='<div class="grid-2">';
+    html+='<div class="card"><div class="card-hd"><h3>🧠 反思状态</h3></div>'+
+      '<div class="row"><span class="l">版本</span><span class="v">'+esc(d.版本||'?')+'</span></div>'+
+      '<div class="row"><span class="l">触发间隔</span><span class="v">'+esc(String(d.trigger_interval||'?'))+' 条消息</span></div>'+
+      '<div class="row"><span class="l">辩证法记录</span><span class="v">'+esc(String(d.dialectic_count||0))+' 条</span></div>'+
+      '</div>';
+    html+='<div class="card"><div class="card-hd"><h3>⚙️ 配置</h3></div>'+
+      '<div class="row"><span class="l">配置来源</span><span class="v" style="font-size:0.72rem;font-family:var(--mono)">'+esc(d.配置来源||'?')+'</span></div>'+
+      '<div class="row"><span class="l">画像摘要</span><span class="v">'+esc(String(d.profile_summary||'—').substring(0,80))+'</span></div>'+
+      '</div>';
+    html+='</div>';
+
+    // 最近辩证法记录
+    const recent=d.recent_dialectics||[];
+    if(recent.length>0){
+      html+='<div class="card"><div class="card-hd"><h3>📋 最近辩证法分析</h3></div>';
+      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem">'+
+        '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg2)">'+
+        '<th style="padding:6px 8px;text-align:left">时间</th>'+
+        '<th style="padding:6px 8px;text-align:left">摘要</th></tr></thead><tbody>';
+      for(const r of recent){
+        html+='<tr style="border-bottom:1px solid var(--bg3)">'+
+          '<td style="padding:6px 8px;color:var(--fg2);white-space:nowrap">'+esc(String(r.time||''))+'</td>'+
+          '<td style="padding:6px 8px">'+esc(String(r.summary||'').substring(0,120))+'</td></tr>';
+      }
+      html+='</tbody></table></div>';
+    }else{
+      html+='<div class="card"><div style="padding:16px;text-align:center;color:var(--fg3)">暂无辩证法记录</div></div>';
+    }
+
+    // 版本号
+    html+='<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">reflection 模块 v'+esc(d.版本||'?')+'</span></div>';
+
+    el.innerHTML=html;
+  }catch(e){
+    el.innerHTML='<div class="card"><div class="card-hd"><h3>◉ reflection</h3></div><div style="padding:16px;color:var(--red)">加载失败: '+esc(e.message)+'</div></div>';
+  }
+}
+
+// ─── User Module Page ────
+async function renderUserPage(el){
+  el.innerHTML='<div class="card"><div class="card-hd"><h3>◉ user</h3></div><div class="loading">加载中...</div></div>';
+  try{
+    const r=await api('/dashboard/engine/user');
+    const d=r.data||r;
+    let html='';
+
+    // 顶部双栏
+    html+='<div class="grid-2">';
+    html+='<div class="card"><div class="card-hd"><h3>👤 用户概览</h3></div>'+
+      '<div class="row"><span class="l">注册用户数</span><span class="v">'+esc(String(d.注册用户数||0))+'</span></div>'+
+      '<div class="row"><span class="l">管理员账户</span><span class="v">'+esc(String(d.管理员账户||0))+'</span></div>'+
+      '<div class="row"><span class="l">普通用户</span><span class="v">'+esc(String(d.普通用户||0))+'</span></div>'+
+      '<div class="row"><span class="l">自动识别</span><span class="v">'+esc(d.主动识别||'已启用')+'</span></div>'+
+      '</div>';
+    html+='<div class="card"><div class="card-hd"><h3>⚙️ 状态</h3></div>'+
+      '<div class="row"><span class="l">版本</span><span class="v">'+esc(d.版本||'?')+'</span></div>'+
+      '<div class="row"><span class="l">状态</span><span class="v">'+esc(d.状态||'运行中')+'</span></div>'+
+      '</div>';
+    html+='</div>';
+
+    // 管理员列表
+    const admins=d.管理员列表||[];
+    html+='<div class="card"><div class="card-hd"><h3>🔑 管理员</h3><button class="btn sm accent" onclick="showCreateUserDialog()">+ 新建</button></div>';
+    if(admins.length>0){
+      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem">'+
+        '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg2)">'+
+        '<th style="padding:6px 8px;text-align:left">UID</th>'+
+        '<th style="padding:6px 8px;text-align:left">显示名</th>'+
+        '<th style="padding:6px 8px;text-align:left">别名</th></tr></thead><tbody>';
+      for(const u of admins){
+        const alias=u.qq||u.account_name?[u.qq,u.account_name].filter(Boolean).join(', '):'—';
+        html+='<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="navigate(\'user-detail\',\''+esc(u.uid||'')+'\')">'+
+          '<td style="padding:6px 8px;color:var(--fg2)">'+esc(u.uid||'')+'</td>'+
+          '<td style="padding:6px 8px">'+esc(u.display_name||'')+'</td>'+
+          '<td style="padding:6px 8px;color:var(--fg2);font-size:0.72rem">'+esc(alias)+'</td></tr>';
+      }
+      html+='</tbody></table></div>';
+    }else{
+      html+='<div style="padding:16px;text-align:center;color:var(--fg3)">暂无管理员</div></div>';
+    }
+
+    // 普通用户列表
+    const users=d.普通用户列表||[];
+    html+='<div class="card"><div class="card-hd"><h3>👥 普通用户</h3><button class="btn sm accent" onclick="showCreateUserDialog()">+ 新建</button></div>';
+    if(users.length>0){
+      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem">'+
+        '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg2)">'+
+        '<th style="padding:6px 8px;text-align:left">UID</th>'+
+        '<th style="padding:6px 8px;text-align:left">显示名</th></tr></thead><tbody>';
+      for(const u of users){
+        html+='<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="navigate(\'user-detail\',\''+esc(u.uid||'')+'\')">'+
+          '<td style="padding:6px 8px;color:var(--fg2)">'+esc(u.uid||'')+'</td>'+
+          '<td style="padding:6px 8px">'+esc(u.display_name||'')+'</td></tr>';
+      }
+      html+='</tbody></table></div>';
+    }else{
+      html+='<div style="padding:16px;text-align:center;color:var(--fg3)">暂无普通用户</div></div>';
+    }
+
+    // 版本号
+    html+='<div style="text-align:right;margin-top:8px"><span style="color:var(--fg3);font-size:0.72rem">user 模块 v'+esc(d.版本||'?')+'</span></div>';
+
+    el.innerHTML=html;
+  }catch(e){
+    el.innerHTML='<div class="card"><div class="card-hd"><h3>◉ user</h3></div><div style="padding:16px;color:var(--red)">加载失败: '+esc(e.message)+'</div></div>';
+  }
+}
+
+// ─── 用户详情页 ────
+async function renderUserDetailPage(el, uid){
+  el.innerHTML='<div class="card"><div class="loading">加载用户画像...</div></div>';
+  try{
+    const r=await api('/dashboard/user/'+encodeURIComponent(uid));
+    if(r.status!=='ok'){
+      el.innerHTML='<div class="card"><div class="card-hd"><h3>👤 用户详情</h3></div><div style="padding:16px;color:var(--red)">加载失败: '+(r.message||'未知错误')+'</div>'+
+        '<div style="padding:0 16px 16px"><button class="btn sm" onclick="history.back()">← 返回</button></div></div>';
+      return;
+    }
+    const toml=r.toml_content||'';
+    let html='';
+    // 返回按钮
+    html+='<div style="margin-bottom:8px"><button class="btn sm" onclick="navigate(\'module\',\'user\')">← 返回用户列表</button></div>';
+    // 用户标识卡片
+    const lines=toml.split('\n');
+    let displayName='',role='',qq='',alias='';
+    for(const l of lines){
+      const m=l.match(/^\\s*display_name\\s*=\\s*"([^"]*)"/);
+      if(m){displayName=m[1];}
+      const rm=l.match(/^\\s*role\\s*=\\s*"([^"]*)"/);
+      if(rm){role=rm[1];}
+      const qm=l.match(/^\\s*qq\\s*=\\s*"([^"]*)"/);
+      if(qm){qq=qm[1];}
+      const am=l.match(/^\\s*name\\s*=\\s*"([^"]*)"/);
+      if(am&&!alias){alias=am[1];}
+    }
+    html+='<div class="card"><div class="card-hd"><h3>👤 '+esc(displayName||uid)+'</h3>'+
+      '<span style="font-size:0.72rem;color:var(--fg3)">'+esc(uid)+'</span></div>'+
+      '<div class="row"><span class="l">角色</span><span class="v">'+esc(role||'?')+'</span></div>'+
+      '<div class="row"><span class="l">QQ</span><span class="v">'+esc(qq||'—')+'</span></div>'+
+      '<div class="row"><span class="l">别名</span><span class="v">'+esc(alias||'—')+'</span></div>'+
+      '</div>';
+    // TOML 编辑卡片
+    html+='<div class="card"><div class="card-hd"><h3>📝 画像内容（TOML）</h3>'+
+      '<div style="font-size:0.72rem;color:var(--fg3)">顶部配置字段（role/qq/name等）为只读配置数据，下方区块可自由编辑</div></div>'+
+      '<textarea id="userTomlEditor" style="width:100%;min-height:400px;font-family:var(--mono);font-size:0.78rem;padding:8px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);white-space:pre;overflow:auto;resize:vertical" spellcheck="false">'+esc(toml)+'</textarea>'+
+      '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'+
+      '<button class="btn accent" onclick="saveUserToml(\''+esc(uid)+'\')">💾 保存</button>'+
+      '<button class="btn" onclick="navigate(\'module\',\'user\')">取消</button>'+
+      '<span style="flex:1"></span>'+
+      '<button class="btn" style="color:var(--red);border-color:var(--red)" onclick="deleteUser(\''+esc(uid)+'\')">🗑 删除用户</button>'+
+      '</div></div>';
+    el.innerHTML=html;
+  }catch(e){
+    el.innerHTML='<div class="card"><div class="card-hd"><h3>◉ user</h3></div><div style="padding:16px;color:var(--red)">加载失败: '+esc(e.message)+'</div></div>';
+  }
+}
+
+// ─── 保存用户 TOML ────
+async function saveUserToml(uid){
+  const editor=document.getElementById('userTomlEditor');
+  if(!editor)return;
+  const content=editor.value;
+  try{
+    const r=await apiPost('/dashboard/user/'+encodeURIComponent(uid)+'/update',{toml_content:content});
+    if(r.status==='ok'){
+      // 重新加载以显示最新版本
+      const el=document.getElementById('pageContent');
+      await renderUserDetailPage(el, uid);
+    }else{
+      alert('保存失败: '+(r.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
+}
+
+// ─── 删除用户 ────
+async function deleteUser(uid){
+  if(!confirm('确定要删除用户「'+uid+'」吗？此操作不可撤销！'))return;
+  try{
+    const r=await apiPost('/dashboard/user/'+encodeURIComponent(uid)+'/delete',{});
+    if(r.status==='ok'){
+      navigate('module','user');
+    }else{
+      alert('删除失败: '+(r.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
+}
+
+// ─── 新建用户对话框 ────
+function showCreateUserDialog(){
+  const uid=prompt('请输入新用户的 UID（英文/数字）:');
+  if(!uid||!uid.trim())return;
+  const trimmed=uid.trim();
+  const disp=prompt('请输入用户显示名（可后续修改）:','新用户');
+  if(!disp)return;
+  const displayName=disp.trim()||trimmed;
+  // 生成默认 TOML 模板
+  const now=new Date().toISOString().split('T')[0];
+  const template=[
+    '# 用户画像 — 自动生成于 '+now,
+    'role = "user"',
+    'name = "'+esc(displayName)+'"',
+    'display_name = "'+esc(displayName)+'"',
+    '',
+    '[preferences]',
+    '  # 在这里添加偏好信息',
+    '',
+    '[notes]',
+    '  # 在这里添加备注',
+    '',
+  ].join('\n');
+  // 直接创建并跳转到详情页编辑
+  createAndEditUser(trimmed, template);
+}
+
+async function createAndEditUser(uid, tomlContent){
+  try{
+    const r=await apiPost('/dashboard/user/create',{uid:uid,toml_content:tomlContent});
+    if(r.status==='ok'){
+      // 直接渲染详情页，不走 navigate（避免 hashchange 双触发导致时序问题）
+      currentPage='user-detail';currentParam=uid;
+      location.hash='#user-detail:'+uid;
+      renderNav();
+      const el=document.getElementById('pageContent');
+      await renderUserDetailPage(el, uid);
+    }else{
+      alert('创建失败: '+(r.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
+}
 
 </script>
 </body>

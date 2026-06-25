@@ -395,7 +395,7 @@ impl Module for KanbanModule {
                 let _ = self.mgr.flush();
                 Ok(EventResponse::Pass)
             }
-            Event::OnMessage { input, channel: _ } => {
+            Event::OnMessage { input, channel: _, .. } => {
                 if self.mgr.config.auto_detect_enabled {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

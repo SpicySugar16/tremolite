@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tremolite_core::TremoliteEngine;
 use tremolite_core::{
     AttentionModule, CronModule, DelegationModule, EmotionModule, KanbanModule,
-    McpModule, MemoryModule, SessionModule, SkillModule, ToolsModule, WebhookModule,
+    McpModule, MemoryModule, SessionModule, SkillModule, ToolsModule, UserModule, WebhookModule,
 };
 use tremolite_channels::ChannelsModule;
 use tremolite_compress::CompressModule;
@@ -336,6 +336,10 @@ fn main() {
     let _ = engine.register_module(Box::new(DelegationModule::new()));
     let _ = engine.register_module(Box::new(ChannelsModule::new()));
     let _ = engine.register_module(Box::new(CronModule::new()));
+
+    let mut user_module = UserModule::new();
+    user_module.load_config(None, &username, &ai_name);
+    let _ = engine.register_module(Box::new(user_module));
 
     // 注入 cron_tasks.json 路径——让 CronModule 每 tick 从 API 写的文件加载
     {
