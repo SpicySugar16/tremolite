@@ -1,6 +1,6 @@
 [package]
 name = "tremolite-attention"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "多尺度注意力（语义评分 via siliconflow API）"
 

@@ -1,6 +1,6 @@
 [package]
 name = "tremolite-delegation"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "任务委派引擎——spawn 子进程/外部工具"
 
