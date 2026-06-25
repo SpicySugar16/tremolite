@@ -144,14 +144,34 @@ impl SessionModule {
         format!("{}_{:08x}", base, suffix)
     }
 
-    /// 如果请求的 session 已冷却，返回一个新 session id；否则返回原 id
+    /// 如果请求的 session 已冷却，先检查同 base 下是否有活跃 session；
+    /// 有则直接复用，无则创建新变体
     fn resolve_session_id(&self, requested: &str) -> String {
+        // 1. 请求的 session 存在且未冷却，直接复用
         if let Some(state) = self.manager.sessions().get(requested) {
-            if state.closed {
-                return self.generate_session_id(requested);
+            if !state.closed {
+                return requested.to_string();
             }
         }
-        requested.to_string()
+
+        // 2. 请求的 session 不存在或已冷却
+        //    检查同 base 下是否有活跃 session
+        let base = requested.split('_').next().unwrap_or(requested);
+        for (id, state) in self.manager.sessions().iter() {
+            if !state.closed {
+                let id_base = id.split('_').next().unwrap_or(id);
+                if id_base == base {
+                    return id.clone(); // 复用同 base 的活跃 session
+                }
+            }
+        }
+
+        // 3. 全部冷却了（或完全不存在），创建新变体
+        if self.manager.sessions().get(requested).map_or(false, |s| s.closed) {
+            self.generate_session_id(requested)
+        } else {
+            requested.to_string()
+        }
     }
 
     fn on_message(&mut self, session_id: &str, channel: &str, content: &str) {
@@ -159,6 +179,8 @@ impl SessionModule {
         self.reload_config();
         let actual_id = self.resolve_session_id(session_id);
         self.manager.get_or_create(&actual_id, channel);
+        // 关闭同一 base 下其他变体——确保同一用户只保留一个活跃 session
+        self.manager.close_in_base_except(&actual_id);
         self._message_count.fetch_add(1, Ordering::Relaxed);
         let (summary, mood) = NoteDistiller::distill(content);
         self.ring.push(actual_id, summary, mood);
@@ -283,6 +305,7 @@ impl SessionModule {
         if let Some(state) = self.manager.sessions_mut().get_mut(session_id) {
             state.closed = false;
             state.closed_at = None;
+            state.manually_activated = true;
             state.last_active = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -294,6 +317,38 @@ impl SessionModule {
         }
     }
 
+    /// 手动冷却指定 session——生成新变体，下次消息会用新 session id
+    pub fn cooldown_session(&mut self, session_id: &str) -> Result<String, String> {
+        let channel = self.manager.sessions()
+            .get(session_id)
+            .map(|s| s.channel.clone())
+            .unwrap_or_default();
+        let exists_closed = self.manager.sessions()
+            .get(session_id)
+            .map(|s| s.closed)
+            .unwrap_or(false);
+        if exists_closed {
+            return Err("该会话已处于冷却状态".into());
+        }
+        // 关闭旧 session
+        if let Some(state) = self.manager.sessions_mut().get_mut(session_id) {
+            state.closed = true;
+            state.closed_at = Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            );
+        }
+        // 主动生成新变体——下次消息不会续用旧的
+        let new_id = self.generate_session_id(session_id);
+        self.manager.get_or_create(&new_id, &channel).close();
+        self.save_state();
+        Ok(format!(
+            "会话「{}」已冷却，下次发言将创建新会话",
+            session_id
+        ))
+    }
     pub(crate) fn reload_config(&mut self) {
         let cfg_path = match self.session_path {
             Some(ref p) => p.join("modules").join("session.toml"),

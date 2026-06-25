@@ -115,6 +115,7 @@ async function apiPut(path,body){const r=await fetch(path,{method:'PUT',headers:
 
 // ─── Escape ────
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function escAttr(s){return String(s).replace(/\\/g,'\\\\').replace(/"/g,'\\"')}
 
 // ─── Uptime ────
 function fmtUptime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;if(h>0)return h+'h '+m+'m';if(m>0)return m+'m '+sec+'s';return sec+'s'}
@@ -215,10 +216,10 @@ async function renderStatus(el,d){
     html+='<div class="card"><div class="card-hd"><h3>\uD83D\uDCDA 学习</h3></div>'+
       '<div class="row"><span class="l">技能</span><span class="v">'+(sc.count||0)+'</span></div>'+
       '<div class="row"><span class="l">练习</span><span class="v">'+(sc.total_practices||0)+'</span></div></div>';
-    // User profile injection card
+    // Last injected content card
     const ui = d.user_injected || '';
-    html+='<div class="card"><div class="card-hd"><h3>👤 用户画像注入</h3></div>'+
-      '<div style="padding:6px 8px;background:var(--bg2);border-radius:var(--radius-sm);font-size:0.72rem;font-family:var(--mono);white-space:pre-wrap;color:var(--fg2)">'+
+    html+='<div class="card"><div class="card-hd"><h3>📝 最后注入内容</h3>'+
+      '</div><div style="padding:6px 8px;background:var(--bg2);border-radius:var(--radius-sm);font-size:0.72rem;font-family:var(--mono);white-space:pre-wrap;color:var(--fg2)">'+
       esc(ui || '暂无注入内容')+'</div></div>';
     html+='</div><div class="grid-2">';
     // LLM card
@@ -1115,7 +1116,7 @@ async function renderSessions(el,d){
             '<td style="padding:4px 8px;text-align:center">'+
               (s.status==='冷却'
                 ? '<button class="btn sm" style="font-size:0.7rem;padding:2px 8px" onclick="activateSession(\''+esc(s.id)+'\')">激活</button>'
-                : '<span style="font-size:0.7rem;color:var(--fg3)">—</span>')+
+                : '<button class="btn sm" style="font-size:0.7rem;padding:2px 8px;color:var(--fg3)" onclick="cooldownSession(\''+esc(s.id)+'\')">冷却</button>')+
             '</td></tr>';
         }
         html+='</tbody></table></div>';
@@ -1143,6 +1144,21 @@ window.activateSession = async function(sessionId){
       renderSessionsPage(document.getElementById('pageContent'));
     }else{
       alert('激活失败: '+(r.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
+};
+
+// ─── 会话冷却 ────
+window.cooldownSession = async function(sessionId){
+  if(!confirm('确定要冷却会话「'+sessionId+'」吗？冷却后下次发消息会新建会话。')) return;
+  try{
+    var r=await apiPost('/dashboard/session/cooldown',{session_id:sessionId});
+    if(r.status==='ok'){
+      renderSessionsPage(document.getElementById('pageContent'));
+    }else{
+      alert('冷却失败: '+(r.message||'未知错误'));
     }
   }catch(e){
     alert('网络错误: '+e.message);
@@ -1547,7 +1563,7 @@ async function renderDelegationModule(el){
       '<span id="maxDepthDisplay" style="font-family:var(--mono);font-size:0.78rem;color:var(--fg);min-width:1.5em;text-align:center">'+maxDep+'</span></div>' +
       '<div class="dim-row">' +
       '<div class="dim-label" style="width:100px;text-align:left;font-size:0.78rem;color:var(--fg2)">默认超时(秒)</div>' +
-      '<input type="number" class="dim-input" min="30" max="600" step="1" value="'+defTimeout+'" id="delTimeoutInput" style="width:80px;font-family:var(--mono)">' +
+      '<input type="number" class="dim-input" min="30" max="600" step="1" value="'+defTimeout+'" id="delTimeoutInput" style="width:80px;font-family:var(--mono)" oninput="delegationAutoSave()">' +
       '<span style="font-size:0.72rem;color:var(--fg3)">30-600</span></div>' +
       '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px">' +
       '<button class="btn accent" onclick="saveDelegationSettings()">\uD83D\uDCBE 保存配置</button>' +
@@ -1728,8 +1744,26 @@ async function refreshAcpStatus(el) {
   }
 }
 
+var delegationDebounce = null;
+function delegationAutoSave() {
+  clearTimeout(delegationDebounce);
+  delegationDebounce = setTimeout(function() {
+    var maxSub = parseInt(document.getElementById('delMaxSubSlider').value, 10);
+    var maxDepth = parseInt(document.getElementById('delMaxDepthSlider').value, 10);
+    var timeout = parseInt(document.getElementById('delTimeoutInput').value, 10) || 300;
+    apiPost('/dashboard/delegation/settings', {
+      max_sub_agents: maxSub,
+      max_depth: maxDepth,
+      default_timeout: timeout
+    }).then(function(r) {
+      var fb = document.getElementById('delSettingsFeedback');
+      if(fb) { fb.textContent = '\u2713'; fb.style.color = 'var(--green)'; }
+    }).catch(function(e) {});
+  }, 500);
+}
 window.handleDelegationSlider=function(id, val) {
   document.getElementById(id).textContent = val;
+  delegationAutoSave();
 };
 
 window.saveDelegationSettings=function() {
@@ -2021,6 +2055,9 @@ function renderMemoryPage(el, data){
   }
   html+='<div style="font-size:0.72rem;color:var(--fg3);margin-top:2px">权重影响各层记忆的重要性评分，数值越大该层越重要。</div></div></div>';
 
+  // ── 代谢配置卡片 ──
+  html+='<div class="card"><div class="card-hd"><h3>⚗️ 代谢配置</h3></div><div id="metabolismConfigBody"><div class="loading">加载中...</div></div></div>';
+
   // 搜索栏
   html+='<div class="card"><div class="card-hd"><h3>🔍 搜索记忆</h3></div>'+
     '<div style="display:flex;gap:6px;padding:4px 0">'+
@@ -2050,6 +2087,13 @@ function renderMemoryPage(el, data){
   el.innerHTML=html;
 
   switchMemTab('l1');
+
+  // Fetch metabolism config
+  api('/dashboard/metabolism').then(function(metaResp){
+    if(metaResp.status === 'ok' && metaResp.data){
+      renderMetabolismConfig(metaResp.data);
+    }
+  });
 }
 
 window.refreshMemoryPage=function(){
@@ -3044,7 +3088,7 @@ function renderCompressPage(el, data){
     '<span class="sl"></span></label>'+
     '<span style="font-size:0.78rem;color:var(--fg2)">自动（模型上限/2）</span></div>'+
     '<div id="compressThresholdRow" style="display:'+(threshold===0?'none':'flex')+';align-items:center;gap:8px">'+
-    '<input type="number" id="compressThresholdInput" value="'+(threshold||64000)+'" min="1000" max="512000" step="1000" style="width:120px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;font-family:var(--mono)">'+
+    '<input type="number" id="compressThresholdInput" value="'+(threshold||64000)+'" min="1000" max="512000" step="1000" style="width:120px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--fg);font-size:0.82rem;font-family:var(--mono)" oninput="saveCompressThresholdDebounce()">'+
     '<span style="font-size:0.78rem;color:var(--fg3)">tokens</span></div>'+
     '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:6px">'+
     '<button class="btn sm" onclick="saveCompressThreshold()">💾 保存阈值</button>'+
@@ -3108,24 +3152,66 @@ window.updateCompressRatio=function(idx,val){
   console.log('ratio', idx, val);
 };
 
+var compressBlocksDebounce = null;
 window.updateCompressBlocksSlider=function(el){
   el.nextElementSibling.value=el.value;
+  var val = el.value;
+  clearTimeout(compressBlocksDebounce);
+  compressBlocksDebounce = setTimeout(function() {
+    saveCompressConfigWithBlocks(parseInt(val, 10) || 4);
+  }, 500);
 };
 
 window.updateCompressBlocksNumber=function(el){
   el.previousElementSibling.value=el.value;
+  var val = el.value;
+  clearTimeout(compressBlocksDebounce);
+  compressBlocksDebounce = setTimeout(function() {
+    saveCompressConfigWithBlocks(parseInt(val, 10) || 4);
+  }, 500);
 };
 
+function saveCompressConfigWithBlocks(blocks) {
+  var fb=document.getElementById('compressConfigFeedback');
+  if(fb) fb.textContent='保存中...';
+  apiPost('/dashboard/compress/settings', { blocks: blocks })
+    .then(function(r) {
+      if(fb) { fb.textContent = '\u2713'; fb.style.color = 'var(--green)'; }
+      setTimeout(function(){if(fb) fb.textContent='';},2000);
+    }).catch(function(e) {
+      if(fb) { fb.textContent = '\u2717 保存失败'; fb.style.color = 'var(--red)'; }
+      console.error('保存压缩配置失败:', e);
+    });
+}
+
+var compressThresholdDebounce = null;
+window.saveCompressThresholdDebounce=function(){
+  clearTimeout(compressThresholdDebounce);
+  compressThresholdDebounce = setTimeout(function() {
+    saveCompressThreshold();
+  }, 500);
+};
 window.saveCompressThreshold=function(){
   var fb=document.getElementById('compressThresholdFeedback');
-  if(fb) fb.textContent='已保存';
-  setTimeout(function(){if(fb) fb.textContent='';},2000);
+  if(fb) fb.textContent='保存中...';
+  var threshold = parseInt(document.getElementById('compressThresholdInput').value, 10) || 64000;
+  var autoThreshold = document.getElementById('compressAutoThreshold').checked;
+  apiPost('/dashboard/compress/settings', {
+    threshold: autoThreshold ? 0 : threshold,
+    auto_threshold: autoThreshold
+  }).then(function(r) {
+    if(fb) { fb.textContent = '\u2713'; fb.style.color = 'var(--green)'; }
+    setTimeout(function(){if(fb) fb.textContent='';},2000);
+  }).catch(function(e) {
+    if(fb) { fb.textContent = '\u2717 保存失败'; fb.style.color = 'var(--red)'; }
+    console.error('保存压缩阈值失败:', e);
+  });
 };
 
 window.saveCompressConfig=function(){
-  var fb=document.getElementById('compressConfigFeedback');
-  if(fb) fb.textContent='已保存';
-  setTimeout(function(){if(fb) fb.textContent='';},2000);
+  var el = document.getElementById('pageContent').querySelector('input[type="range"].dim-slider');
+  var blocks = el ? parseInt(el.value, 10) : 4;
+  saveCompressConfigWithBlocks(blocks);
 };
 
 // ─── Delegation ACP helpers ────
@@ -3585,6 +3671,32 @@ async function renderUserPage(el){
     const d=r.data||r;
     let html='';
 
+    // 用户模块配置卡片（异步加载）
+    try{
+      const sr=await api('/dashboard/user/settings');
+      if(sr.status==='ok'){
+        const cfg=sr.config||{};
+        html+='<div class="card"><div class="card-hd"><h3>⚙️ 画像更新模式</h3></div>'+
+          '<div style="padding:6px 0">'+
+          '<label style="display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-bottom:1px solid var(--bg3);font-size:0.82rem">'+
+          '<span>自主判断模式<br><span style="font-size:0.7rem;color:var(--fg3)">AI 根据对话内容自动判断是否需要更新画像</span></span>'+
+          '<label class="toggle"><input type="checkbox" id="cfgAutoMode" '+(cfg.auto_mode?'checked':'')+
+          ' onchange="saveUserSettings({auto_mode:this.checked})"><span class="sl"></span></label></label>'+
+          '<label style="display:flex;align-items:center;justify-content:space-between;padding:5px 6px;border-bottom:1px solid var(--bg3);font-size:0.82rem">'+
+          '<span>定时触发模式<br><span style="font-size:0.7rem;color:var(--fg3)">累计消息数到达阈值时自动提取画像</span></span>'+
+          '<label class="toggle"><input type="checkbox" id="cfgTimedMode" '+(cfg.timed_mode?'checked':'')+
+          ' onchange="saveUserSettings({timed_mode:this.checked})"><span class="sl"></span></label></label>'+
+          '<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 6px;font-size:0.82rem">'+
+          '<span>消息阈值</span>'+
+          '<input type="number" id="cfgMsgInterval" value="'+esc(String(cfg.message_interval||5))+'" min="1" max="100" '+
+          'style="width:60px;padding:2px 4px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.78rem;text-align:center" '+
+          'onchange="saveUserSettings({message_interval:parseInt(this.value)||5})"></div>'+
+          '</div></div>';
+      }
+    }catch(e){
+      // 静默失败，不影响页面加载
+    }
+
     // 顶部双栏
     html+='<div class="grid-2">';
     html+='<div class="card"><div class="card-hd"><h3>👤 用户概览</h3></div>'+
@@ -3593,27 +3705,26 @@ async function renderUserPage(el){
       '<div class="row"><span class="l">普通用户</span><span class="v">'+esc(String(d.普通用户||0))+'</span></div>'+
       '<div class="row"><span class="l">自动识别</span><span class="v">'+esc(d.主动识别||'已启用')+'</span></div>'+
       '</div>';
-    html+='<div class="card"><div class="card-hd"><h3>⚙️ 状态</h3></div>'+
-      '<div class="row"><span class="l">版本</span><span class="v">'+esc(d.版本||'?')+'</span></div>'+
-      '<div class="row"><span class="l">状态</span><span class="v">'+esc(d.状态||'运行中')+'</span></div>'+
-      '</div>';
+    html+='<div class="card"><div class="card-hd"><h3>📝 最后注入内容</h3></div>'+
+      '<div style="padding:6px 8px;background:var(--bg2);border-radius:var(--radius-sm);font-size:0.72rem;font-family:var(--mono);white-space:pre-wrap;color:var(--fg2)">'+
+      esc(d.最后注入内容||'暂无注入内容')+'</div></div>';
     html+='</div>';
 
     // 管理员列表
     const admins=d.管理员列表||[];
     html+='<div class="card"><div class="card-hd"><h3>🔑 管理员</h3><button class="btn sm accent" onclick="showCreateUserDialog()">+ 新建</button></div>';
     if(admins.length>0){
-      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem">'+
+      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem;table-layout:fixed">'+
         '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg2)">'+
-        '<th style="padding:6px 8px;text-align:left">UID</th>'+
-        '<th style="padding:6px 8px;text-align:left">显示名</th>'+
-        '<th style="padding:6px 8px;text-align:left">别名</th></tr></thead><tbody>';
+        '<th style="padding:6px 8px;text-align:left;width:25%">UID</th>'+
+        '<th style="padding:6px 8px;text-align:left;width:40%">显示名</th>'+
+        '<th style="padding:6px 8px;text-align:left;width:35%">别名</th></tr></thead><tbody>';
       for(const u of admins){
-        const alias=u.qq||u.account_name?[u.qq,u.account_name].filter(Boolean).join(', '):'—';
+        const alias=(u.alias_others&&u.alias_others.length>0)?u.alias_others.join(', '):(u.account_name||u.qq||'—');
         html+='<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="navigate(\'user-detail\',\''+esc(u.uid||'')+'\')">'+
-          '<td style="padding:6px 8px;color:var(--fg2)">'+esc(u.uid||'')+'</td>'+
-          '<td style="padding:6px 8px">'+esc(u.display_name||'')+'</td>'+
-          '<td style="padding:6px 8px;color:var(--fg2);font-size:0.72rem">'+esc(alias)+'</td></tr>';
+          '<td style="padding:6px 8px;color:var(--fg2);width:25%">'+esc(u.uid||'')+'</td>'+
+          '<td style="padding:6px 8px;width:40%">'+esc(u.display_name||'')+'</td>'+
+          '<td style="padding:6px 8px;color:var(--fg2);font-size:0.72rem;width:35%">'+esc(alias)+'</td></tr>';
       }
       html+='</tbody></table></div>';
     }else{
@@ -3624,14 +3735,17 @@ async function renderUserPage(el){
     const users=d.普通用户列表||[];
     html+='<div class="card"><div class="card-hd"><h3>👥 普通用户</h3><button class="btn sm accent" onclick="showCreateUserDialog()">+ 新建</button></div>';
     if(users.length>0){
-      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem">'+
+      html+='<table style="width:100%;border-collapse:collapse;font-size:0.78rem;table-layout:fixed">'+
         '<thead><tr style="border-bottom:1px solid var(--border);color:var(--fg2)">'+
-        '<th style="padding:6px 8px;text-align:left">UID</th>'+
-        '<th style="padding:6px 8px;text-align:left">显示名</th></tr></thead><tbody>';
+        '<th style="padding:6px 8px;text-align:left;width:25%">UID</th>'+
+        '<th style="padding:6px 8px;text-align:left;width:40%">显示名</th>'+
+        '<th style="padding:6px 8px;text-align:left;width:35%">别名</th></tr></thead><tbody>';
       for(const u of users){
+        const alias=(u.alias_others&&u.alias_others.length>0)?u.alias_others.join(', '):(u.account_name||u.qq||'');
         html+='<tr style="border-bottom:1px solid var(--bg3);cursor:pointer" onclick="navigate(\'user-detail\',\''+esc(u.uid||'')+'\')">'+
-          '<td style="padding:6px 8px;color:var(--fg2)">'+esc(u.uid||'')+'</td>'+
-          '<td style="padding:6px 8px">'+esc(u.display_name||'')+'</td></tr>';
+          '<td style="padding:6px 8px;color:var(--fg2);width:25%">'+esc(u.uid||'')+'</td>'+
+          '<td style="padding:6px 8px;width:40%">'+esc(u.display_name||'')+'</td>'+
+          '<td style="padding:6px 8px;color:var(--fg2);font-size:0.72rem;width:35%">'+esc(alias||'—')+'</td></tr>';
       }
       html+='</tbody></table></div>';
     }else{
@@ -3658,31 +3772,51 @@ async function renderUserDetailPage(el, uid){
       return;
     }
     const toml=r.toml_content||'';
+    const aliasTable=r.alias_table||{name:'',qq:'',display_name:'',others:[]};
     let html='';
     // 返回按钮
     html+='<div style="margin-bottom:8px"><button class="btn sm" onclick="navigate(\'module\',\'user\')">← 返回用户列表</button></div>';
-    // 用户标识卡片
-    const lines=toml.split('\n');
-    let displayName='',role='',qq='',alias='';
-    for(const l of lines){
-      const m=l.match(/^\\s*display_name\\s*=\\s*"([^"]*)"/);
-      if(m){displayName=m[1];}
-      const rm=l.match(/^\\s*role\\s*=\\s*"([^"]*)"/);
-      if(rm){role=rm[1];}
-      const qm=l.match(/^\\s*qq\\s*=\\s*"([^"]*)"/);
-      if(qm){qq=qm[1];}
-      const am=l.match(/^\\s*name\\s*=\\s*"([^"]*)"/);
-      if(am&&!alias){alias=am[1];}
+    // 用户信息——可编辑卡片
+    const tomlLines=toml.split('\n');
+    let role='',traitsSection='';
+    let inTraits=false;
+    for(const l of tomlLines){
+      const rm=l.match(/^\s*role\s*=\s*"([^"]*)"/);
+      if(rm){role=rm[1];continue;}
+      if(l.startsWith('[traits]')){inTraits=true;}
+      if(inTraits){traitsSection+=l+'\n';}
     }
-    html+='<div class="card"><div class="card-hd"><h3>👤 '+esc(displayName||uid)+'</h3>'+
+    // 别名表格展示区域
+    html+='<div class="card"><div class="card-hd"><h3>👤 基本信息</h3>'+
       '<span style="font-size:0.72rem;color:var(--fg3)">'+esc(uid)+'</span></div>'+
-      '<div class="row"><span class="l">角色</span><span class="v">'+esc(role||'?')+'</span></div>'+
-      '<div class="row"><span class="l">QQ</span><span class="v">'+esc(qq||'—')+'</span></div>'+
-      '<div class="row"><span class="l">别名</span><span class="v">'+esc(alias||'—')+'</span></div>'+
-      '</div>';
+      '<div class="row"><span class="l">角色</span>'+
+      '<select id="editRole" style="padding:3px 6px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.78rem">'+
+      '<option value="admin"'+(role==='admin'?' selected':'')+'>admin</option>'+
+      '<option value="user"'+(role==='user'?' selected':'')+'>user</option>'+
+      '<option value="anonymous"'+(role==='anonymous'?' selected':'')+'>anonymous</option>'+
+      '</select></div>'+
+      '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">'+
+      '<div style="font-size:0.78rem;color:var(--accent);margin-bottom:8px;font-weight:600">📋 别名表格</div>'+
+      '<div class="row"><span class="l">账号名</span>'+
+      '<input id="editAliasName" value="'+esc(aliasTable.name||'')+'" style="flex:1;padding:3px 6px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.78rem"></div>'+
+      '<div class="row"><span class="l">QQ号</span>'+
+      '<input id="editAliasQq" value="'+esc(aliasTable.qq||'')+'" style="flex:1;padding:3px 6px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.78rem"></div>'+
+      '<div class="row"><span class="l">显示名</span>'+
+      '<input id="editAliasDisplayName" value="'+esc(aliasTable.display_name||'')+'" style="flex:1;padding:3px 6px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:0.78rem"></div>'+
+      '<div class="row" style="align-items:flex-start"><span class="l" style="padding-top:4px">其他别名</span>'+
+      '<div style="flex:1;display:flex;flex-wrap:wrap;gap:4px" id="othersContainer">'+
+      (aliasTable.others||[]).map((v,i)=>'<span style="display:inline-flex;align-items:center;gap:3px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:2px 6px;font-size:0.72rem">'+
+        '<input class="otherAliasInput" value="'+esc(v)+'" style="width:80px;background:var(--bg);border:none;color:var(--fg);font-size:0.72rem;outline:none" data-idx="'+i+'">'+
+        '<span style="cursor:pointer;color:var(--red);font-size:0.7rem" onclick="removeOtherAlias('+i+')">✕</span></span>').join('')+
+      '<button class="btn sm" onclick="addOtherAlias()" style="font-size:0.7rem;padding:2px 8px">+ 添加</button></div></div>'+
+      '</div>'+
+      '<div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">'+
+      '<button class="btn accent sm" onclick="saveUserBasicInfo(\''+esc(uid)+'\')">💾 保存别名表格</button>'+
+      '<button class="btn sm" onclick="renameUser(\''+esc(uid)+'\')">✏️ 重命名 UID</button>'+
+      '</div></div>';
     // TOML 编辑卡片
     html+='<div class="card"><div class="card-hd"><h3>📝 画像内容（TOML）</h3>'+
-      '<div style="font-size:0.72rem;color:var(--fg3)">顶部配置字段（role/qq/name等）为只读配置数据，下方区块可自由编辑</div></div>'+
+      '<div style="font-size:0.72rem;color:var(--fg3)">顶部配置字段（role等）为只读配置数据，下方区块可自由编辑</div></div>'+
       '<textarea id="userTomlEditor" style="width:100%;min-height:400px;font-family:var(--mono);font-size:0.78rem;padding:8px;background:var(--bg2);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-sm);white-space:pre;overflow:auto;resize:vertical" spellcheck="false">'+esc(toml)+'</textarea>'+
       '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'+
       '<button class="btn accent" onclick="saveUserToml(\''+esc(uid)+'\')">💾 保存</button>'+
@@ -3730,6 +3864,127 @@ async function deleteUser(uid){
   }
 }
 
+// ─── 别名表格辅助函数 ────
+let otherAliasCounter=0;
+window.addOtherAlias=function(){
+  const container=document.getElementById('othersContainer');
+  if(!container)return;
+  const idx=otherAliasCounter++;
+  const span=document.createElement('span');
+  span.style.cssText='display:inline-flex;align-items:center;gap:3px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:2px 6px;font-size:0.72rem';
+  span.innerHTML='<input class="otherAliasInput" value="" style="width:80px;background:var(--bg);border:none;color:var(--fg);font-size:0.72rem;outline:none" data-idx="'+idx+'">'+
+    '<span style="cursor:pointer;color:var(--red);font-size:0.7rem" onclick="removeOtherAliasEl(this)">✕</span>';
+  container.insertBefore(span, container.lastElementChild);
+};
+window.removeOtherAlias=function(idx){
+  const container=document.getElementById('othersContainer');
+  if(!container)return;
+  const inputs=container.querySelectorAll('.otherAliasInput');
+  for(const inp of inputs){
+    if(parseInt(inp.dataset.idx)===idx){
+      const span=inp.parentElement;
+      span.remove();
+      return;
+    }
+  }
+};
+window.removeOtherAliasEl=function(el){
+  const span=el.parentElement;
+  span.remove();
+};
+
+// ─── 保存用户基本信息（角色/别名表格）───
+function replaceOrAppend(toml, field, value){
+  const regex=new RegExp('^('+field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')+'\\s*=\\s*).*$','m');
+  if(regex.test(toml)){
+    return toml.replace(regex, (match, prefix) => prefix + '"' + escAttr(value) + '"');
+  }
+  const idx=toml.search(/^\[/m);
+  const line=field+' = "'+escAttr(value)+'"\n';
+  if(idx>=0) return toml.slice(0, idx) + line + toml.slice(idx);
+  return toml + '\n' + line;
+}
+function removeField(toml, field){
+  const regex=new RegExp('^'+field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')+'\\s*=\\s*"[^"]*"\\s*\n?','m');
+  return toml.replace(regex, '');
+}
+function setAliasSection(toml, aliasName, aliasQq, aliasDisplay, others){
+  // Unconditionally remove legacy top-level fields (now in [alias])
+  let result=removeField(toml, 'name');
+  result=removeField(result, 'qq');
+  result=removeField(result, 'display_name');
+  // Remove existing [alias] section (only up to next [section] or EOF)
+  result=result.replace(/\n?\[alias\][\s\S]*?(?=\n\[|$)/g, '');
+  // Build [alias] section — only write non-empty values
+  let aliasLines='\n[alias]\n';
+  if(aliasName) aliasLines+='name = "'+escAttr(aliasName)+'"\n';
+  if(aliasQq) aliasLines+='qq = "'+escAttr(aliasQq)+'"\n';
+  if(aliasDisplay) aliasLines+='display_name = "'+escAttr(aliasDisplay)+'"\n';
+  if(others.length>0) aliasLines+='others = ["'+others.map(o=>escAttr(o)).join('", "')+'"]\n';
+  // Insert [alias] before [traits] or at end
+  const traitsIdx=result.search(/^\[traits\]/m);
+  if(traitsIdx>=0){
+    result=result.slice(0, traitsIdx) + aliasLines + '\n' + result.slice(traitsIdx);
+  }else{
+    result=result.trimEnd()+'\n'+aliasLines+'\n';
+  }
+  return result;
+}
+async function saveUserBasicInfo(uid){
+  const role=document.getElementById('editRole');
+  const aliasName=document.getElementById('editAliasName');
+  const aliasQq=document.getElementById('editAliasQq');
+  const aliasDisplay=document.getElementById('editAliasDisplayName');
+  if(!role||!aliasName||!aliasQq||!aliasDisplay)return;
+  try{
+    const r=await api('/dashboard/user/'+encodeURIComponent(uid));
+    if(r.status!=='ok'||!r.toml_content){
+      alert('获取用户信息失败');
+      return;
+    }
+    let newToml=r.toml_content;
+    // Update role (kept at top level)
+    newToml=replaceOrAppend(newToml, 'role', role.value);
+    // Collect others values from input fields
+    const others=[];
+    const container=document.getElementById('othersContainer');
+    if(container){
+      const inputs=container.querySelectorAll('.otherAliasInput');
+      inputs.forEach(inp=>{
+        const v=inp.value.trim();
+        if(v) others.push(v);
+      });
+    }
+    // Set [alias] section
+    newToml=setAliasSection(newToml, aliasName.value, aliasQq.value, aliasDisplay.value, others);
+    const res=await apiPost('/dashboard/user/'+encodeURIComponent(uid)+'/update',{toml_content:newToml});
+    if(res.status==='ok'){
+      const el=document.getElementById('pageContent');
+      await renderUserDetailPage(el, uid);
+    }else{
+      alert('保存失败: '+(res.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
+}
+
+// ─── 重命名 UID ────
+async function renameUser(uid){
+  const newUid=prompt('输入新的 UID：',uid);
+  if(!newUid||newUid===uid)return;
+  try{
+    const r=await apiPost('/dashboard/user/'+encodeURIComponent(uid)+'/rename',{new_uid:newUid});
+    if(r.status==='ok'){
+      navigate('module','user');
+    }else{
+      alert('重命名失败: '+(r.message||'未知错误'));
+    }
+  }catch(e){
+    alert('网络错误: '+e.message);
+  }
+}
+
 // ─── 新建用户对话框 ────
 function showCreateUserDialog(){
   const uid=prompt('请输入新用户的 UID（英文/数字）:');
@@ -3743,8 +3998,10 @@ function showCreateUserDialog(){
   const template=[
     '# 用户画像 — 自动生成于 '+now,
     'role = "user"',
-    'name = "'+esc(displayName)+'"',
     'display_name = "'+esc(displayName)+'"',
+    '',
+    '[alias]',
+    '  name = "'+esc(displayName)+'"',
     '',
     '[preferences]',
     '  # 在这里添加偏好信息',
@@ -3775,6 +4032,104 @@ async function createAndEditUser(uid, tomlContent){
   }
 }
 
+// ─── 保存用户模块配置 ────
+async function saveUserSettings(changes){
+  try{
+    // 读取当前配置
+    const cur=await api('/dashboard/user/settings');
+    if(cur.status!=='ok')return;
+    const cfg=cur.config||{};
+    // 合并改动
+    const merged={
+      auto_mode: changes.auto_mode!==undefined ? changes.auto_mode : cfg.auto_mode,
+      timed_mode: changes.timed_mode!==undefined ? changes.timed_mode : cfg.timed_mode,
+      message_interval: changes.message_interval!==undefined ? changes.message_interval : cfg.message_interval,
+    };
+    const r=await apiPost('/dashboard/user/settings', merged);
+    if(r.status!=='ok'){
+      console.error('保存用户配置失败:', r.message);
+    }
+    // 保存成功后刷新 UI 状态
+    const refresh = await api('/dashboard/user/settings');
+    if(refresh.status === 'ok' && refresh.config){
+      document.getElementById('cfgAutoMode').checked = refresh.config.auto_mode;
+      document.getElementById('cfgTimedMode').checked = refresh.config.timed_mode;
+    }
+  }catch(e){
+    console.error('保存用户配置失败:', e);
+  }
+}
+
+// ─── Metabolism config (embedded in Memory page) ────
+function renderMetabolismConfig(cfg){
+  var container=document.getElementById('metabolismConfigBody');
+  if(!container)return;
+  var tiers=[
+    {id:'l1_to_l2',label:'L1→L2 降级'},
+    {id:'l2_to_l3',label:'L2→L3 降级'},
+    {id:'l3_ram_to_disk',label:'L3+RAM→Disk 降级'},
+    {id:'ram_to_disk',label:'RAM→Disk 降级'},
+    {id:'disk_promotion',label:'Disk→RAM 晋升'}
+  ];
+  var html='';
+  for(var i=0;i<tiers.length;i++){
+    var t=tiers[i],td=cfg[t.id]||{},tm=td.time_mode||{},cm=td.count_mode||{},thr=td.thresholds||{},w=td.weights||{};
+    html+='<div style="border:1px solid var(--bg3);border-radius:var(--radius-sm);padding:8px;margin-bottom:8px;background:var(--bg2)">'+
+      '<div style="font-size:0.82rem;font-weight:600;color:var(--accent);margin-bottom:6px">'+esc(t.label)+'</div>'+
+      '<div class="dim-row"><div class="dim-label" style="width:80px;text-align:left;font-size:0.78rem;color:var(--fg2)">定时模式</div>'+
+        '<label class="toggle"><input type="checkbox" id="'+t.id+'_time_enabled" '+(tm.enabled?'checked':'')+'><span class="sl"></span></label>'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">间隔</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_time_interval" value="'+(tm.interval_secs||300)+'" style="width:60px">'+
+        '<span style="font-size:0.72rem;color:var(--fg3)">秒</span></div>'+
+      '<div class="dim-row"><div class="dim-label" style="width:80px;text-align:left;font-size:0.78rem;color:var(--fg2)">计数模式</div>'+
+        '<label class="toggle"><input type="checkbox" id="'+t.id+'_count_enabled" '+(cm.enabled?'checked':'')+'><span class="sl"></span></label>'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">批大小</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_count_batch" value="'+(cm.batch_size||10)+'" style="width:60px">'+
+        '<span style="font-size:0.72rem;color:var(--fg3)">条</span></div>'+
+      '<div class="dim-row"><div class="dim-label" style="width:80px;text-align:left;font-size:0.78rem;color:var(--fg2)">阈值</div>'+
+        '<span style="font-size:0.72rem;color:var(--fg3)">降级</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_threshold_demote" value="'+(thr.demote||0.3)+'" step="0.05" min="0" max="1" style="width:48px">'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">晋升</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_threshold_promote" value="'+(thr.promote||0.7)+'" step="0.05" min="0" max="1" style="width:48px"></div>'+
+      '<div class="dim-row"><div class="dim-label" style="width:80px;text-align:left;font-size:0.78rem;color:var(--fg2)">权重</div>'+
+        '<span style="font-size:0.72rem;color:var(--fg3)">时效</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_weight_recency" value="'+(w.recency||0.3)+'" step="0.05" min="0" max="1" style="width:48px">'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">频率</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_weight_frequency" value="'+(w.frequency||0.3)+'" step="0.05" min="0" max="1" style="width:48px">'+
+        '<span style="font-size:0.72rem;color:var(--fg3);margin-left:4px">重要度</span>'+
+        '<input type="number" class="dim-input" id="'+t.id+'_weight_importance" value="'+(w.importance||0.4)+'" step="0.05" min="0" max="1" style="width:48px"></div>'+
+      '</div>';
+  }
+  html+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">'+
+    '<button class="btn accent" onclick="saveMetabolism()">💾 保存代谢配置</button>'+
+    '<span id="metabolismSaveFeedback" style="font-size:0.72rem;color:var(--fg3);line-height:28px"></span></div>';
+  container.innerHTML=html;
+}
+
+function saveMetabolism(){
+  var fb=document.getElementById('metabolismSaveFeedback');
+  if(fb){fb.textContent='保存中...';fb.style.color='var(--fg2)';}
+  var tiers=['l1_to_l2','l2_to_l3','l3_ram_to_disk','ram_to_disk','disk_promotion'];
+  var payload={config:{metabolism:{}}};
+  for(var i=0;i<tiers.length;i++){
+    var t=tiers[i];
+    payload.config.metabolism[t]={
+      time_mode:{enabled:document.getElementById(t+'_time_enabled').checked,interval_secs:parseInt(document.getElementById(t+'_time_interval').value)||300},
+      count_mode:{enabled:document.getElementById(t+'_count_enabled').checked,batch_size:parseInt(document.getElementById(t+'_count_batch').value)||10},
+      thresholds:{demote:parseFloat(document.getElementById(t+'_threshold_demote').value)||0.3,promote:parseFloat(document.getElementById(t+'_threshold_promote').value)||0.7},
+      weights:{recency:parseFloat(document.getElementById(t+'_weight_recency').value)||0.3,frequency:parseFloat(document.getElementById(t+'_weight_frequency').value)||0.3,importance:parseFloat(document.getElementById(t+'_weight_importance').value)||0.4}
+    };
+  }
+  apiPost('/dashboard/metabolism',payload).then(function(r){
+    if(fb){
+      if(r.status==='ok'){fb.textContent='✓ 已保存';fb.style.color='var(--green)';}
+      else{fb.textContent='✗ 保存失败';fb.style.color='var(--red)';}
+      setTimeout(function(){fb.textContent='';},2000);
+    }
+  }).catch(function(e){
+    if(fb){fb.textContent='✗ 网络错误';fb.style.color='var(--red)';}
+  });
+}
 </script>
 </body>
 </html>

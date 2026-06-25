@@ -905,6 +905,151 @@ impl DiskColdArchive {
     }
 }
 
+// ─── 代谢配置——双模式独立配置 ──────────────────────────
+// 每个层级通路有自己独立的定时模式 + 计数模式配置
+// L3+RAM 绑定为一个层级（降级时一起沉到 Disk，晋升时一起上来）
+
+/// 定时模式配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeModeConfig {
+    pub enabled: bool,
+    /// 间隔秒数（仅 enabled 时生效）
+    pub interval_secs: u64,
+}
+
+impl Default for TimeModeConfig {
+    fn default() -> Self {
+        Self { enabled: true, interval_secs: 300 }
+    }
+}
+
+/// 计数模式配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CountModeConfig {
+    pub enabled: bool,
+    /// 触发条数（仅 enabled 时生效）
+    pub batch_size: usize,
+}
+
+impl Default for CountModeConfig {
+    fn default() -> Self {
+        Self { enabled: true, batch_size: 10 }
+    }
+}
+
+/// 层级独立的阈值参数
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierThresholds {
+    pub demote: f64,
+    pub promote: f64,
+}
+
+impl Default for TierThresholds {
+    fn default() -> Self {
+        Self { demote: 0.3, promote: 0.7 }
+    }
+}
+
+/// 层级独立的活力分权重
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierWeights {
+    pub recency: f64,
+    pub frequency: f64,
+    pub importance: f64,
+}
+
+impl Default for TierWeights {
+    fn default() -> Self {
+        Self { recency: 0.3, frequency: 0.3, importance: 0.4 }
+    }
+}
+
+/// 单一层级通路的双模式配置 + 独立阈值/权重
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierMetabolismConfig {
+    pub time_mode: TimeModeConfig,
+    pub count_mode: CountModeConfig,
+    pub thresholds: TierThresholds,
+    pub weights: TierWeights,
+}
+
+impl Default for TierMetabolismConfig {
+    fn default() -> Self {
+        Self {
+            time_mode: TimeModeConfig::default(),
+            count_mode: CountModeConfig::default(),
+            thresholds: TierThresholds::default(),
+            weights: TierWeights::default(),
+        }
+    }
+}
+
+/// 完整代谢配置——每个层级通路独立双模式 + 独立阈值/权重
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetabolismConfig {
+    /// 全局开关
+    pub enabled: bool,
+    /// L1→L2 降级（对话提炼到画像）
+    pub l1_to_l2: TierMetabolismConfig,
+    /// L2→L3 索引创建（画像降为索引+全量保留）
+    pub l2_to_l3: TierMetabolismConfig,
+    /// L3+RAM→Disk 降级（冷归档，L3 和 RAM 绑定）
+    pub l3_ram_to_disk: TierMetabolismConfig,
+    /// RAM→Disk 降级（额外的 RAM 冷归档）
+    pub ram_to_disk: TierMetabolismConfig,
+    /// Disk→RAM 晋升（被频繁命中的升回来）
+    pub disk_promotion: TierMetabolismConfig,
+}
+
+impl Default for MetabolismConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            l1_to_l2: TierMetabolismConfig {
+                time_mode: TimeModeConfig { enabled: true, interval_secs: 300 },
+                count_mode: CountModeConfig { enabled: true, batch_size: 10 },
+                thresholds: TierThresholds { demote: 0.30, promote: 0.70 },
+                weights: TierWeights { recency: 0.3, frequency: 0.3, importance: 0.4 },
+            },
+            l2_to_l3: TierMetabolismConfig {
+                time_mode: TimeModeConfig { enabled: true, interval_secs: 600 },
+                count_mode: CountModeConfig { enabled: true, batch_size: 20 },
+                thresholds: TierThresholds { demote: 0.25, promote: 0.75 },
+                weights: TierWeights { recency: 0.3, frequency: 0.3, importance: 0.4 },
+            },
+            l3_ram_to_disk: TierMetabolismConfig {
+                time_mode: TimeModeConfig { enabled: true, interval_secs: 1800 },
+                count_mode: CountModeConfig { enabled: true, batch_size: 50 },
+                thresholds: TierThresholds { demote: 0.20, promote: 0.80 },
+                weights: TierWeights { recency: 0.4, frequency: 0.2, importance: 0.4 },
+            },
+            ram_to_disk: TierMetabolismConfig {
+                time_mode: TimeModeConfig { enabled: false, interval_secs: 3600 },
+                count_mode: CountModeConfig { enabled: true, batch_size: 100 },
+                thresholds: TierThresholds { demote: 0.15, promote: 0.85 },
+                weights: TierWeights { recency: 0.5, frequency: 0.2, importance: 0.3 },
+            },
+            disk_promotion: TierMetabolismConfig {
+                time_mode: TimeModeConfig { enabled: false, interval_secs: 3600 },
+                count_mode: CountModeConfig { enabled: true, batch_size: 5 },
+                thresholds: TierThresholds { demote: 0.30, promote: 0.70 },
+                weights: TierWeights { recency: 0.4, frequency: 0.3, importance: 0.3 },
+            },
+        }
+    }
+}
+
+impl MetabolismConfig {
+    /// 从 TOML 字符串加载，缺失字段用默认值
+    pub fn from_toml(toml_str: &str) -> Self {
+        toml::from_str(toml_str)
+            .unwrap_or_else(|e| {
+                tracing::warn!("metabolism config parse failed: {}, using defaults", e);
+                Self::default()
+            })
+    }
+}
+
 // ─── 代谢引擎 ─────────────────────────────────────────
 // 核心：自动评估每条记忆的活力分，决定升降级
 // 现在会动态调整阈值，根据历史分数分布自动适配
@@ -913,12 +1058,12 @@ impl DiskColdArchive {
 const SCORE_HISTORY_SIZE: usize = 100;
 
 pub struct MetabolismEngine {
-    /// 活力分阈值：低于此值降级
-    pub demote_threshold: f64,
-    /// 活力分阈值：高于此值升级
-    pub promote_threshold: f64,
-    /// 检查间隔（秒）
-    pub check_interval: u64,
+    /// 完整代谢配置
+    pub config: MetabolismConfig,
+    /// 上次检查时间戳（各层级独立，秒）
+    pub last_checks: [u64; 5], // [l1→l2, l2→l3, l3_ram→disk, ram→disk, disk_promotion]
+    /// 计数模式计数器（各层级独立，条数）
+    pub count_counters: [usize; 5],
     last_check: u64,
     /// 历史分数——滑动窗口
     history: Vec<f64>,
@@ -929,12 +1074,73 @@ pub struct MetabolismEngine {
 impl MetabolismEngine {
     pub fn new() -> Self {
         Self {
-            demote_threshold: 0.3,
-            promote_threshold: 0.7,
-            check_interval: 300, // 每5分钟检查一次
-            last_check: now_secs(),
+            config: MetabolismConfig::default(),
+            last_checks: [0; 5],
+            count_counters: [0; 5],
+            last_check: 0,
             history: Vec::with_capacity(SCORE_HISTORY_SIZE),
             adaptive: true,
+        }
+    }
+
+    pub fn with_config(mut self, cfg: MetabolismConfig) -> Self {
+        self.config = cfg;
+        self
+    }
+
+    /// 获取指定层级的配置
+    pub fn tier_config(&self, idx: usize) -> &TierMetabolismConfig {
+        match idx {
+            0 => &self.config.l1_to_l2,
+            1 => &self.config.l2_to_l3,
+            2 => &self.config.l3_ram_to_disk,
+            3 => &self.config.ram_to_disk,
+            4 => &self.config.disk_promotion,
+            _ => panic!("invalid tier index: {}", idx),
+        }
+    }
+
+    /// 返回指定层级使用的降级阈值
+    pub fn demote_threshold(&self, tier_idx: usize) -> f64 {
+        self.tier_config(tier_idx).thresholds.demote
+    }
+
+    /// 返回指定层级使用的晋升阈值
+    pub fn promote_threshold(&self, tier_idx: usize) -> f64 {
+        self.tier_config(tier_idx).thresholds.promote
+    }
+
+    /// 检查指定层级是否触发（定时模式 + 计数模式 OR 逻辑）
+    pub fn should_check_tier(&mut self, tier_idx: usize, now: u64) -> bool {
+        if tier_idx >= 5 || !self.config.enabled {
+            return false;
+        }
+        let cfg = self.tier_config(tier_idx);
+
+        let time_trigger = cfg.time_mode.enabled
+            && now - self.last_checks[tier_idx] >= cfg.time_mode.interval_secs;
+        let count_trigger = cfg.count_mode.enabled
+            && self.count_counters[tier_idx] >= cfg.count_mode.batch_size;
+
+        if time_trigger {
+            self.last_checks[tier_idx] = now;
+        }
+        if count_trigger {
+            self.count_counters[tier_idx] = 0;
+        }
+
+        time_trigger || count_trigger
+    }
+
+    /// 重置所有（层间晋升/降级完成后调一下，回收 L1 buffer 或移出条目后再使用）
+    pub fn reset_counters(&mut self) {
+        self.count_counters = [0; 5];
+    }
+
+    /// 递增计数（每次 on_message/on_response 后调用）
+    pub fn tick(&mut self) {
+        for c in &mut self.count_counters {
+            *c = c.saturating_add(1);
         }
     }
 
@@ -960,14 +1166,12 @@ impl MetabolismEngine {
         let variance: f64 = self.history.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / n;
         let stddev = variance.sqrt();
 
-        // 动态阈值 = 均值 ± 半个标准差
         let new_demote = (mean - 0.5 * stddev).clamp(0.1, 0.8);
         let new_promote = (mean + 0.5 * stddev).clamp(0.2, 0.95);
 
-        // 确保 demote < promote（至少差 0.05）
         if new_demote < new_promote - 0.05 {
-            self.demote_threshold = new_demote;
-            self.promote_threshold = new_promote;
+            self.config.l1_to_l2.thresholds.demote = new_demote;
+            self.config.l1_to_l2.thresholds.promote = new_promote;
         }
     }
 
@@ -976,44 +1180,46 @@ impl MetabolismEngine {
         let now = now_secs();
         let score = entry.vitality_score(now);
         let fresh = MemoryEntry::freshness_bonus(entry.created_at, now);
+        let dt = self.demote_threshold(0);
+        let pt = self.promote_threshold(0);
 
         match entry.level {
             MemoryLevel::L1 => {
-                if score + fresh < self.demote_threshold {
+                if score + fresh < dt {
                     MetabolicAction::DemoteTo(MemoryLevel::L2)
                 } else {
                     MetabolicAction::Stay
                 }
             }
             MemoryLevel::L2 => {
-                if score > self.promote_threshold {
+                if score > pt {
                     MetabolicAction::PromoteTo(MemoryLevel::L1)
-                } else if score + fresh < self.demote_threshold * 0.8 {
+                } else if score + fresh < dt * 0.8 {
                     MetabolicAction::DemoteTo(MemoryLevel::L3)
                 } else {
                     MetabolicAction::Stay
                 }
             }
             MemoryLevel::L3 => {
-                if score > self.promote_threshold {
+                if score > pt {
                     MetabolicAction::PromoteTo(MemoryLevel::L2)
-                } else if score + fresh < self.demote_threshold * 0.6 {
+                } else if score + fresh < dt * 0.6 {
                     MetabolicAction::DemoteTo(MemoryLevel::Ram)
                 } else {
                     MetabolicAction::Stay
                 }
             }
             MemoryLevel::Ram => {
-                if score > self.promote_threshold {
+                if score > pt {
                     MetabolicAction::PromoteTo(MemoryLevel::L3)
-                } else if score + fresh < self.demote_threshold * 0.4 {
+                } else if score + fresh < dt * 0.4 {
                     MetabolicAction::DemoteTo(MemoryLevel::Disk)
                 } else {
                     MetabolicAction::Stay
                 }
             }
             MemoryLevel::Disk => {
-                if score > self.promote_threshold {
+                if score > pt {
                     MetabolicAction::PromoteTo(MemoryLevel::Ram)
                 } else {
                     MetabolicAction::Stay
@@ -1022,15 +1228,10 @@ impl MetabolismEngine {
         }
     }
 
-    /// 是否到了检查时间
+    /// 保留兼容——旧单层 should_check 委托到所有层级 OR
     pub fn should_check(&mut self) -> bool {
         let now = now_secs();
-        if now - self.last_check >= self.check_interval {
-            self.last_check = now;
-            true
-        } else {
-            false
-        }
+        (0..5).any(|i| self.should_check_tier(i, now))
     }
 }
 
@@ -1776,123 +1977,126 @@ impl MemoryManager {
 
     /// 执行代谢检查——完整五层级联：L1→L2→L3+RAM→Disk
     pub fn metabolize(&mut self) -> Vec<(u64, String, MetabolicAction)> {
-        if !self.metabolism.should_check() {
-            return Vec::new();
-        }
-
-        let mut actions = Vec::new();
-        let threshold = self.metabolism.demote_threshold;
         let now = now_secs();
+        let mut actions = Vec::new();
+        let dt = self.metabolism.demote_threshold(0);
 
-        // ── Disk → RAM：被频繁命中的归档条目升回 RAM ──
-        let disk_threshold = self.disk_promote_threshold;
-        if let Ok(mut hits) = self.disk_hits.lock() {
-            let promote_ids: Vec<u64> = hits.iter()
-                .filter(|(_, &c)| c >= disk_threshold)
-                .map(|(&id, _)| id)
-                .collect();
-            for id in promote_ids {
-                if let Some(entry) = self.disk.read_by_id(id) {
-                    self.ram.add(id, &entry.content, entry.created_at);
-                    // 从 Disk Index 读关键词和向量，配对写回 L3
-                    let kw = self.disk.read_keyword(id)
-                        .unwrap_or_else(|| entry.content.chars().take(15).collect());
-                    let emb = self.disk.read_embedding(id);
-                    self.l3.add(IndexEntry {
-                        id,
-                        tags: vec!["promoted".into()],
-                        created_at: now,
-                        last_access: now,
-                        level_from: MemoryLevel::Disk,
-                        summary: kw,
-                        embedding: emb,
-                    });
-                    tracing::info!("memory: Disk→RAM promoted id={}", id);
+        // ── Disk→RAM：被频繁命中的归档条目升回 RAM ──
+        if self.metabolism.should_check_tier(4, now) {
+            let disk_threshold = self.disk_promote_threshold;
+            if let Ok(mut hits) = self.disk_hits.lock() {
+                let promote_ids: Vec<u64> = hits.iter()
+                    .filter(|(_, &c)| c >= disk_threshold)
+                    .map(|(&id, _)| id)
+                    .collect();
+                for id in promote_ids {
+                    if let Some(entry) = self.disk.read_by_id(id) {
+                        self.ram.add(id, &entry.content, entry.created_at);
+                        // 从 Disk Index 读关键词和向量，配对写回 L3
+                        let kw = self.disk.read_keyword(id)
+                            .unwrap_or_else(|| entry.content.chars().take(15).collect());
+                        let emb = self.disk.read_embedding(id);
+                        self.l3.add(IndexEntry {
+                            id,
+                            tags: vec!["promoted".into()],
+                            created_at: now,
+                            last_access: now,
+                            level_from: MemoryLevel::Disk,
+                            summary: kw,
+                            embedding: emb,
+                        });
+                        tracing::info!("memory: Disk→RAM promoted id={}", id);
+                    }
+                    hits.remove(&id);
                 }
-                hits.remove(&id);
             }
         }
 
         // ── L1 → L2 降级（有用才留，无用扔掉）──
-        let demote_threshold = self.metabolism.demote_threshold;
-        for (_sid, buf) in &self.l1_sessions {
-            let all: Vec<MemoryEntry> = buf.entries().iter().cloned().collect();
-            for entry in &all {
-                let score = entry.vitality_score(now);
-                if score < demote_threshold {
-                    // 有用：进 L2
-                    if entry.importance >= 0.3 && entry.content.len() >= 10 {
-                        self.l2.set(
-                            &format!("demoted-{}", entry.id),
-                            entry.content.clone(),
-                            entry.tags.clone(),
-                            entry.importance,
-                        );
-                        actions.push((entry.id, format!("L1→L2: {}", &entry.content.chars().take(30).collect::<String>()), MetabolicAction::DemoteTo(MemoryLevel::L2)));
-                    } else {
-                        // 无用：直接扔掉
-                        actions.push((entry.id, String::new(), MetabolicAction::Discard));
+        if self.metabolism.should_check_tier(0, now) {
+            for (_sid, buf) in &self.l1_sessions {
+                let all: Vec<MemoryEntry> = buf.entries().iter().cloned().collect();
+                for entry in &all {
+                    let score = entry.vitality_score(now);
+                    if score < dt {
+                        // 有用：进 L2
+                        if entry.importance >= 0.3 && entry.content.len() >= 10 {
+                            self.l2.set(
+                                &format!("demoted-{}", entry.id),
+                                entry.content.clone(),
+                                entry.tags.clone(),
+                                entry.importance,
+                            );
+                            actions.push((entry.id, format!("L1→L2: {}", &entry.content.chars().take(30).collect::<String>()), MetabolicAction::DemoteTo(MemoryLevel::L2)));
+                        } else {
+                            // 无用：直接扔掉
+                            actions.push((entry.id, String::new(), MetabolicAction::Discard));
+                        }
                     }
                 }
             }
         }
 
         // ── L2 → L3 + RAM ──
-        let l2_demoted = self.l2.evict_demoted(threshold);
-        for (_, entry) in &l2_demoted {
-            // 画像条目走 ProfileCache 降级通道，不走 L3+RAM
-            if entry.tags.contains(&"profile".to_string()) {
+        if self.metabolism.should_check_tier(1, now) {
+            let l2_demoted = self.l2.evict_demoted(dt);
+            for (_, entry) in &l2_demoted {
+                // 画像条目走 ProfileCache 降级通道，不走 L3+RAM
+                if entry.tags.contains(&"profile".to_string()) {
+                    let keywords: String = entry.content.chars().take(15).collect();
+                    self.profile_cache.add_entry(&entry.id.to_string(), entry.content.clone(), entry.tags.clone(), self.l2.get_embedding(&entry.id.to_string()));
+                    actions.push((entry.id, format!("L2→ProfileCache: {}", keywords), MetabolicAction::DemoteTo(MemoryLevel::L3)));
+                    continue;
+                }
                 let keywords: String = entry.content.chars().take(15).collect();
-                self.profile_cache.add_entry(&entry.id.to_string(), entry.content.clone(), entry.tags.clone(), self.l2.get_embedding(&entry.id.to_string()));
-                actions.push((entry.id, format!("L2→ProfileCache: {}", keywords), MetabolicAction::DemoteTo(MemoryLevel::L3)));
-                continue;
+                actions.push((entry.id, format!("L2→L3: {}", keywords), MetabolicAction::DemoteTo(MemoryLevel::L3)));
+                let key = &entry.id.to_string();
+                let l2_detailed = self.l2.get_embedding(key);
+                let l2_rough = self.l2.get_rough_embedding(key);
+                // 有粗略向量 → 直接复用；没有 → 从关键词算一个
+                let l3_emb = l2_rough.or_else(|| {
+                    l2_detailed.as_ref().map(|d| make_rough_vector(&keywords, d.len()))
+                });
+                // 详细向量打包进 RAM（如果有的话）
+                if let Some(ref detailed) = l2_detailed {
+                    self.ram.store_vector(entry.id, detailed);
+                }
+                self.l3.add(IndexEntry {
+                    id: entry.id,
+                    tags: entry.tags.clone(),
+                    created_at: entry.created_at,
+                    last_access: entry.last_access,
+                    level_from: MemoryLevel::L2,
+                    summary: keywords,
+                    embedding: l3_emb,
+                });
+                // 完整条目写入 RAM 文件
+                self.ram.add(entry.id, &entry.content, entry.created_at);
             }
-            let keywords: String = entry.content.chars().take(15).collect();
-            actions.push((entry.id, format!("L2→L3: {}", keywords), MetabolicAction::DemoteTo(MemoryLevel::L3)));
-            let key = &entry.id.to_string();
-            let l2_detailed = self.l2.get_embedding(key);
-            let l2_rough = self.l2.get_rough_embedding(key);
-            // 有粗略向量 → 直接复用；没有 → 从关键词算一个
-            let l3_emb = l2_rough.or_else(|| {
-                l2_detailed.as_ref().map(|d| make_rough_vector(&keywords, d.len()))
-            });
-            // 详细向量打包进 RAM（如果有的话）
-            if let Some(ref detailed) = l2_detailed {
-                self.ram.store_vector(entry.id, detailed);
-            }
-            self.l3.add(IndexEntry {
-                id: entry.id,
-                tags: entry.tags.clone(),
-                created_at: entry.created_at,
-                last_access: entry.last_access,
-                level_from: MemoryLevel::L2,
-                summary: keywords,
-                embedding: l3_emb,
-            });
-            // 完整条目写入 RAM 文件
-            self.ram.add(entry.id, &entry.content, entry.created_at);
         }
 
-        // ── L3 stale + RAM stale → Disk ──
-        let l3_demoted = self.l3.evict_demoted(threshold);
-        for idx in &l3_demoted {
-            // 读 RAM 文件取完整内容
-            let full_content = self.ram.read(idx.id).unwrap_or_default();
-            // 写 Disk 独立索引 + 文件
-            if !full_content.is_empty() {
-                self.disk
-                    .store_entry(idx.id, &idx.summary, &full_content, idx.created_at, idx.embedding.clone());
-                self.ram.remove(idx.id);
+        // ── L3 stale + RAM stale → Disk（捆绑处理）──
+        if self.metabolism.should_check_tier(2, now) {
+            let l3_demoted = self.l3.evict_demoted(dt);
+            for idx in &l3_demoted {
+                // 读 RAM 文件取完整内容
+                let full_content = self.ram.read(idx.id).unwrap_or_default();
+                // 写 Disk 独立索引 + 文件
+                if !full_content.is_empty() {
+                    self.disk
+                        .store_entry(idx.id, &idx.summary, &full_content, idx.created_at, idx.embedding.clone());
+                    self.ram.remove(idx.id);
+                }
+                actions.push((idx.id, format!("L3+RAM→Disk: {}", idx.summary), MetabolicAction::DemoteTo(MemoryLevel::Disk)));
             }
-            actions.push((idx.id, format!("L3+RAM→Disk: {}", idx.summary), MetabolicAction::DemoteTo(MemoryLevel::Disk)));
-        }
 
-        // ── RAM stale（L3已经降级后的残留）→ Disk ──
-        let ram_demoted = self.ram.evict_demoted(threshold);
-        for (id, content) in &ram_demoted {
-            let snippet: String = content.chars().take(15).collect();
-            self.disk.store_entry(*id, &snippet, content, now, None);
-            actions.push((*id, format!("RAM→Disk: {}", snippet), MetabolicAction::DemoteTo(MemoryLevel::Disk)));
+            // RAM stale（L3已经降级后的残留）→ Disk
+            let ram_demoted = self.ram.evict_demoted(dt);
+            for (id, content) in &ram_demoted {
+                let snippet: String = content.chars().take(15).collect();
+                self.disk.store_entry(*id, &snippet, content, now, None);
+                actions.push((*id, format!("RAM→Disk: {}", snippet), MetabolicAction::DemoteTo(MemoryLevel::Disk)));
+            }
         }
 
         // ── 反向 promotion ──
@@ -1910,7 +2114,7 @@ impl MemoryManager {
     /// 反向 promotion——含 Disk→RAM 通路
     fn promote_active_entries_with_disk(&mut self) {
         let now = now_secs();
-        let promote_threshold = self.metabolism.promote_threshold;
+        let promote_threshold = self.metabolism.promote_threshold(4);
 
         // ── RAM → L3 ──
         let fresh_ids: Vec<u64> = self.ram.all_ids().iter().copied()
@@ -2184,6 +2388,7 @@ mod tests {
             vec!["夸葵".into()],
             0.8,
             "qqbot".into(),
+            String::new(),
         );
         assert!(id > 0);
 
@@ -2202,8 +2407,7 @@ mod tests {
         let mut mm = MemoryManager::new(tmp.clone());
 
         // 强制每次调 metabolize 都触发
-        mm.metabolism.check_interval = 0;
-        mm.metabolism.demote_threshold = 0.65;
+        mm.metabolism.config.l1_to_l2.thresholds.demote = 0.65;
 
         // 写入 10 条低重要度记忆（有新鲜度加成，需要高阈值才能触发降级）
         // 再加 2 条高重要度记忆（预期保留 L1）
@@ -2214,6 +2418,7 @@ mod tests {
                 vec!["low".into()],
                 0.1,
                 "test".into(),
+                String::new(),
             );
         }
         for i in 0..2 {
@@ -2223,14 +2428,16 @@ mod tests {
                 vec!["high".into()],
                 0.9,
                 "test".into(),
+                String::new(),
             );
         }
 
         // 验证初始状态
         assert_eq!(mm.l1_sessions.get("test").map(|b| b.len()).unwrap_or(0), 12, "L1 应该有 12 条");
 
-        // 重置代谢计时器，确保第一次调用触发
-        mm.metabolism.last_check = 0;
+        // 重置代谢计时器，确保第一次调用触发 L1→L2
+        mm.metabolism.last_checks[0] = 0;
+        mm.metabolism.config.l1_to_l2.time_mode.interval_secs = 0;
         let actions = mm.metabolize();
         assert!(!actions.is_empty(), "代谢应该产生动作");
 
@@ -2242,7 +2449,7 @@ mod tests {
         assert!(!results.is_empty(), "搜索应该能跨所有层级查");
 
         // 再跑一次代谢（验证不崩溃）
-        mm.metabolism.last_check = 0;
+        mm.metabolism.last_checks[0] = 0;
         let _actions2 = mm.metabolize();
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -2304,6 +2511,7 @@ mod tests {
                 vec!["饮食".into()],
                 0.8,
                 "test".into(),
+                String::new(),
             );
             mm.remember(
                 "test",
@@ -2311,9 +2519,11 @@ mod tests {
                 vec!["自我".into()],
                 0.7,
                 "test".into(),
+                String::new(),
             );
             // 触发 save 路径——手动调 metabolize 让数据下沉后 flush
-            mm.metabolism.last_check = 0;
+            mm.metabolism.last_checks[0] = 0;
+            mm.metabolism.config.l1_to_l2.time_mode.interval_secs = 0;
             mm.metabolize();
             assert!(mm.flush_all().is_ok(), "持久化应该成功");
         }
@@ -2352,7 +2562,8 @@ mod tests {
         mm.disk_hits.lock().unwrap().insert(999, 3); // 达到阈值
 
         // 执行代谢——应该触发 Disk→RAM 晋升
-        mm.metabolism.last_check = 0;
+        mm.metabolism.last_checks[4] = 0;
+        mm.metabolism.config.disk_promotion.time_mode.interval_secs = 0;
         let actions = mm.metabolize();
 
         // 验证 RAM 中有了晋升来的条目

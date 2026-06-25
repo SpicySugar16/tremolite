@@ -157,7 +157,7 @@ async fn run_server_inner(
         .route("/dashboard/cron/{idx}/delete", post(handle_cron_delete))
         .route("/dashboard/cron/{idx}/update", post(handle_cron_update))
         .route("/dashboard/cron/{idx}/run", post(handle_cron_run))
-        .route("/dashboard/delegation/settings", post(handle_delegation_settings_save))
+        .route("/dashboard/delegation/settings", get(handle_delegation_settings_get).post(handle_delegation_settings_save))
         .route("/dashboard/delegation/acp/add", post(handle_acp_agent_add))
         .route("/dashboard/delegation/acp/remove", post(handle_acp_agent_remove))
         .route("/dashboard/mcp/servers", get(handle_mcp_servers))
@@ -171,10 +171,13 @@ async fn run_server_inner(
         .route("/dashboard/config/profile", get(handle_profile_get).post(handle_profile_set))
         .route("/dashboard/attention/update", post(handle_attention_update))
         .route("/dashboard/compress/exec", post(handle_compress_exec))
+        .route("/dashboard/compress/settings", get(handle_compress_settings_get).post(handle_compress_settings_ser))
         .route("/dashboard/session/config", post(handle_session_config_save))
         .route("/dashboard/session/toggle_share", post(handle_session_toggle_share))
         .route("/dashboard/session/activate", post(handle_session_activate))
+        .route("/dashboard/session/cooldown", post(handle_session_cooldown))
         .route("/dashboard/config/check", get(handle_config_check))
+        .route("/dashboard/metabolism", get(handle_metabolism_get).post(handle_metabolism_save))
         .route("/dashboard/config/avatar/upload", post(handle_avatar_upload))
         .route("/avatars/{*filename}", get(handle_avatar_serve))
         .route("/dashboard/plan", get(handle_plan_list))
@@ -192,6 +195,9 @@ async fn run_server_inner(
         .route("/dashboard/user/create", post(handle_user_create))
         .route("/dashboard/user/{uid}/update", post(handle_user_update))
         .route("/dashboard/user/{uid}/delete", post(handle_user_delete))
+        .route("/dashboard/user/{uid}/rename", post(handle_user_rename))
+        .route("/dashboard/user/settings", get(handle_user_settings_get))
+        .route("/dashboard/user/settings", post(handle_user_settings_set))
         .layer(CorsLayer::permissive())
         .layer(Extension(state.clone()));
 
@@ -1797,26 +1803,88 @@ async fn handle_engine_mod(
                     let uid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string();
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(val) = content.parse::<toml::Value>() {
-                            let display_name = val.get("display_name").and_then(|v| v.as_str())
+                            let alias = val.get("alias");
+                            let display_name = alias.and_then(|a| a.get("display_name")).and_then(|v| v.as_str())
+                                .or_else(|| val.get("display_name").and_then(|v| v.as_str()))
+                                .or_else(|| alias.and_then(|a| a.get("name")).and_then(|v| v.as_str()))
                                 .or_else(|| val.get("name").and_then(|v| v.as_str()))
                                 .unwrap_or(&uid).to_string();
                             let role = val.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                            let qq = val.get("qq").and_then(|v| v.as_str()).unwrap_or("");
-                            let account_name = val.get("account_name").and_then(|v| v.as_str()).unwrap_or("");
+                            let qq = alias.and_then(|a| a.get("qq")).and_then(|v| v.as_str())
+                                .or_else(|| val.get("qq").and_then(|v| v.as_str()))
+                                .unwrap_or("");
+                            let account_name = alias.and_then(|a| a.get("name")).and_then(|v| v.as_str())
+                                .or_else(|| val.get("account_name").and_then(|v| v.as_str()))
+                                .or_else(|| val.get("name").and_then(|v| v.as_str()))
+                                .unwrap_or("");
+                            let alias_others: Vec<String> = val.get("alias")
+                                .and_then(|a| a.get("others"))
+                                .and_then(|v| v.as_array())
+                                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                .unwrap_or_default();
                             let entry = serde_json::json!({
                                 "uid": uid,
                                 "display_name": display_name,
                                 "role": role,
                                 "qq": qq,
                                 "account_name": account_name,
+                                "alias_others": alias_others,
                             });
                             if role == "admin" { admins.push(entry); }
+                            else { regulars.push(entry); }
+                            total += 1;
+                        } else {
+                            // TOML 解析失败 → 行级 fallback
+                            tracing::warn!("user: failed to parse TOML for {}, using line-level fallback", uid);
+                            let mut fallback_role = "user".to_string();
+                            let mut fallback_display = uid.clone();
+                            let mut fallback_qq = String::new();
+                            let mut fallback_name = String::new();
+                            for line in content.lines() {
+                                let t = line.trim();
+                                if let Some(v) = t.strip_prefix("role = \"") {
+                                    if let Some(end) = v.find('"') {
+                                        fallback_role = v[..end].to_string();
+                                    }
+                                } else if let Some(v) = t.strip_prefix("display_name = \"") {
+                                    if let Some(end) = v.find('"') {
+                                        fallback_display = v[..end].to_string();
+                                    }
+                                } else if let Some(v) = t.strip_prefix("qq = \"") {
+                                    if let Some(end) = v.find('"') {
+                                        fallback_qq = v[..end].to_string();
+                                    }
+                                } else if let Some(v) = t.strip_prefix("name = \"") {
+                                    if let Some(end) = v.find('"') {
+                                        fallback_name = v[..end].to_string();
+                                    }
+                                }
+                            }
+                            let entry = serde_json::json!({
+                                "uid": uid,
+                                "display_name": fallback_display,
+                                "role": fallback_role,
+                                "qq": fallback_qq,
+                                "account_name": fallback_name,
+                                "alias_others": serde_json::Value::Array(vec![]),
+                            });
+                            if fallback_role == "admin" { admins.push(entry); }
                             else { regulars.push(entry); }
                             total += 1;
                         }
                     }
                 }
             }
+
+            // 获取 UserModule 的上次注入内容
+            let user_injected = state.modules.as_ref()
+                .and_then(|mods| mods.with_module("user", |m| {
+                    m.as_any()
+                        .and_then(|any| any.downcast_ref::<tremolite_core::UserModule>())
+                        .map(|um| um.last_injected.clone())
+                }))
+                .flatten()
+                .unwrap_or_default();
 
             serde_json::json!({
                 "注册用户数": total,
@@ -1826,6 +1894,7 @@ async fn handle_engine_mod(
                 "普通用户列表": regulars,
                 "配置包": users_dir.to_string_lossy().to_string(),
                 "版本": tremolite_core::CORE_VERSION,
+                "最后注入内容": user_injected,
             })
         }
         "mcp" => {
@@ -1883,17 +1952,59 @@ async fn handle_engine_mod(
 }
 
 async fn handle_delegation_settings_save(
+    Extension(state): Extension<Arc<AppState>>,
     axum::Json(payload): axum::Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     let home = std::env::var("HOME").unwrap_or_default();
     let config_path = std::path::Path::new(&home)
-        .join(".tremolite").join("profiles").join("aoi").join("config.toml");
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("modules").join("delegation.toml");
 
-    // 读现有配置
-    let config_str = std::fs::read_to_string(&config_path).unwrap_or_default();
-    // 简单响应成功即可，不需要实际持久化（可以后续扩展）
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let max_sub = payload.get("max_sub_agents").and_then(|v| v.as_u64()).unwrap_or(3);
+    let max_depth = payload.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(1);
+    let timeout = payload.get("default_timeout").and_then(|v| v.as_u64()).unwrap_or(300);
+
+    let content = format!(
+        "[delegation]\nmax_sub_agents = {}\nmax_depth = {}\ndefault_timeout = {}\n",
+        max_sub, max_depth, timeout
+    );
+
+    match std::fs::write(&config_path, &content) {
+        Ok(_) => Json(serde_json::json!({"status": "ok"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("保存失败: {}", e)})),
+    }
+}
+
+async fn handle_delegation_settings_get(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("modules").join("delegation.toml");
+
+    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let max_sub = 3u64;
+    let max_depth = 1u64;
+    let timeout = 300u64;
+
+    let parsed: toml::Value = content.parse().unwrap_or(toml::Value::Table(toml::map::Map::new()));
+    let del = parsed.get("delegation");
+    let max_sub = del.and_then(|d| d.get("max_sub_agents")).and_then(|v| v.as_integer()).unwrap_or(3) as u64;
+    let max_depth = del.and_then(|d| d.get("max_depth")).and_then(|v| v.as_integer()).unwrap_or(1) as u64;
+    let timeout = del.and_then(|d| d.get("default_timeout")).and_then(|v| v.as_integer()).unwrap_or(300) as u64;
+
     Json(serde_json::json!({
-        "status": "ok"
+        "status": "ok",
+        "data": {
+            "max_sub_agents": max_sub,
+            "max_depth": max_depth,
+            "default_timeout": timeout,
+        }
     }))
 }
 
@@ -3198,11 +3309,78 @@ async fn handle_user_get(
     }
 
     match std::fs::read_to_string(&path) {
-        Ok(content) => Json(serde_json::json!({
-            "status": "ok",
-            "uid": uid,
-            "toml_content": content,
-        })),
+        Ok(content) => {
+            // 解析 TOML 提取别名信息
+            let alias_table = match content.parse::<toml::Value>() {
+                Ok(val) => {
+                    let name = val.get("name").or_else(|| val.get("account_name"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let qq = val.get("qq").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let display_name = val.get("display_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let others: Vec<String> = val.get("alias")
+                        .and_then(|a| a.get("others"))
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    // 从 alias section 取 name/qq（优先于顶层的旧字段）
+                    let alias_name = val.get("alias")
+                        .and_then(|a| a.get("name"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .unwrap_or(name);
+                    let alias_qq = val.get("alias")
+                        .and_then(|a| a.get("qq"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .unwrap_or(qq);
+                    let alias_display = val.get("alias")
+                        .and_then(|a| a.get("display_name"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .unwrap_or(display_name);
+                    serde_json::json!({
+                        "name": alias_name,
+                        "qq": alias_qq,
+                        "display_name": alias_display,
+                        "others": others,
+                    })
+                }
+                Err(_) => {
+                    // TOML 解析失败时，用行级回退从原始字符串提取字段
+                    let mut fallback_name = String::new();
+                    let mut fallback_qq = String::new();
+                    let mut fallback_display = String::new();
+                    for line in content.lines() {
+                        if let Some(val) = line.strip_prefix("name = \"") {
+                            if let Some(end) = val.find('"') {
+                                fallback_name = val[..end].to_string();
+                            }
+                        } else if let Some(val) = line.strip_prefix("qq = \"") {
+                            if let Some(end) = val.find('"') {
+                                fallback_qq = val[..end].to_string();
+                            }
+                        } else if let Some(val) = line.strip_prefix("display_name = \"") {
+                            if let Some(end) = val.find('"') {
+                                fallback_display = val[..end].to_string();
+                            }
+                        }
+                    }
+                    serde_json::json!({
+                        "name": fallback_name,
+                        "qq": fallback_qq,
+                        "display_name": fallback_display,
+                        "others": serde_json::Value::Array(vec![]),
+                    })
+                }
+            };
+
+            Json(serde_json::json!({
+                "status": "ok",
+                "uid": uid,
+                "toml_content": content,
+                "alias_table": alias_table,
+            }))
+        }
         Err(e) => Json(serde_json::json!({"status": "error", "message": format!("读取失败: {}", e)})),
     }
 }
@@ -3264,7 +3442,24 @@ async fn handle_user_update(
     }
 
     match std::fs::write(&path, toml_content) {
-        Ok(_) => Json(serde_json::json!({"status": "ok", "message": "更新成功"})),
+        Ok(_) => {
+            // 验证写入的 TOML 是否可解析
+            let validation_warning = match std::fs::read_to_string(&path) {
+                Ok(saved) => {
+                    if saved.parse::<toml::Value>().is_err() {
+                        Some("写入成功但 TOML 格式异常，建议检查")
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => Some("写入成功但读取验证失败"),
+            };
+            let mut resp = serde_json::json!({"status": "ok", "message": "更新成功"});
+            if let Some(warn) = validation_warning {
+                resp["warning"] = serde_json::Value::String(warn.to_string());
+            }
+            Json(resp)
+        }
         Err(e) => Json(serde_json::json!({"status": "error", "message": format!("写入失败: {}", e)})),
     }
 }
@@ -3288,6 +3483,132 @@ async fn handle_user_delete(
     match std::fs::remove_file(&path) {
         Ok(_) => Json(serde_json::json!({"status": "ok", "message": "删除成功"})),
         Err(e) => Json(serde_json::json!({"status": "error", "message": format!("删除失败: {}", e)})),
+    }
+}
+
+/// POST /dashboard/user/{uid}/rename — 重命名用户 UID
+async fn handle_user_rename(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(uid): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let new_uid = payload.get("new_uid").and_then(|v| v.as_str()).unwrap_or("");
+
+    if new_uid.is_empty() {
+        return Json(serde_json::json!({"status": "error", "message": "缺少 new_uid"}));
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let users_dir = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("users");
+    let old_path = users_dir.join(format!("{}.toml", uid));
+    let new_path = users_dir.join(format!("{}.toml", new_uid));
+
+    if !old_path.exists() {
+        return Json(serde_json::json!({"status": "error", "message": "用户不存在"}));
+    }
+
+    if new_path.exists() {
+        return Json(serde_json::json!({"status": "error", "message": "新 UID 已存在"}));
+    }
+
+    match std::fs::rename(&old_path, &new_path) {
+        Ok(_) => Json(serde_json::json!({"status": "ok", "message": format!("已重命名为 {}", new_uid)})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("重命名失败: {}", e)})),
+    }
+}
+
+/// GET /dashboard/user/settings — 读取用户模块配置
+async fn handle_user_settings_get(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let profile_dir = std::path::Path::new(&home).join(".tremolite/profiles").join(&state.profile_name);
+    let config_path = profile_dir.join("modules").join("user.toml");
+
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => {
+            // 返回默认配置
+            return Json(serde_json::json!({
+                "status": "ok",
+                "config": {
+                    "auto_mode": true,
+                    "timed_mode": false,
+                    "message_interval": 5
+                },
+                "config_path": config_path.to_string_lossy().to_string(),
+            }));
+        }
+    };
+
+    match content.parse::<toml::Value>() {
+        Ok(val) => {
+            let auto_mode = val.get("profile_update")
+                .and_then(|p| p.get("auto_mode")).and_then(|v| v.as_bool()).unwrap_or(true);
+            let timed_mode = val.get("profile_update")
+                .and_then(|p| p.get("timed_mode")).and_then(|v| v.as_bool()).unwrap_or(false);
+            let message_interval = val.get("profile_update")
+                .and_then(|p| p.get("message_interval")).and_then(|v| v.as_integer()).unwrap_or(5) as u32;
+            Json(serde_json::json!({
+                "status": "ok",
+                "config": {
+                    "auto_mode": auto_mode,
+                    "timed_mode": timed_mode,
+                    "message_interval": message_interval,
+                },
+                "config_path": config_path.to_string_lossy().to_string(),
+            }))
+        }
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("配置解析失败: {}", e),
+        })),
+    }
+}
+
+/// POST /dashboard/user/settings — 保存用户模块配置
+async fn handle_user_settings_set(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let auto_mode = payload.get("auto_mode").and_then(|v| v.as_bool()).unwrap_or(true);
+    let timed_mode = payload.get("timed_mode").and_then(|v| v.as_bool()).unwrap_or(false);
+    let message_interval = payload.get("message_interval").and_then(|v| v.as_u64()).unwrap_or(5);
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let profile_dir = std::path::Path::new(&home).join(".tremolite/profiles").join(&state.profile_name);
+    let config_path = profile_dir.join("modules").join("user.toml");
+
+    // 创建父目录
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let toml_content = format!(
+        "[profile_update]\n\
+         auto_mode = {}\n\
+         timed_mode = {}\n\
+         message_interval = {}\n",
+        auto_mode, timed_mode, message_interval
+    );
+
+    match std::fs::write(&config_path, &toml_content) {
+        Ok(_) => Json(serde_json::json!({
+            "status": "ok",
+            "message": "配置已保存",
+            "config": {
+                "auto_mode": auto_mode,
+                "timed_mode": timed_mode,
+                "message_interval": message_interval,
+            },
+        })),
+        Err(e) => Json(serde_json::json!({
+            "status": "error",
+            "message": format!("保存失败: {}", e),
+        })),
     }
 }
 
@@ -3455,15 +3776,25 @@ async fn handle_dashboard_sessions(
     let home = std::env::var("HOME").unwrap_or_default();
     let tremolite_dir = std::path::Path::new(&home).join(".tremolite");
 
-    // 读 session 配置
+    // 从引擎获取实际 idle_timeout（而不是从文件读，文件可能已过时）
+    let engine_idle = state.modules.as_ref()
+        .and_then(|mods| mods.with_module("session", |m| {
+            m.as_any()
+                .and_then(|a| a.downcast_ref::<tremolite_core::SessionModule>())
+                .map(|sm| sm.manager.idle_timeout_secs())
+        }))
+        .flatten()
+        .unwrap_or(300);
+
+    // 读 session 配置文件（兜底）
     let config_path = tremolite_dir.join("profiles").join(&state.profile_name).join("modules").join("session.toml");
-    let mut idle_timeout: u64 = 300;
+    let mut idle_timeout: u64 = engine_idle;
     let mut cleanup_timeout: u64 = 2592000;
     let mut max_rings: u64 = 20;
     if let Ok(content) = std::fs::read_to_string(&config_path) {
         if let Ok(toml_val) = content.parse::<toml::Value>() {
             if let Some(cfg) = toml_val.get("session") {
-                idle_timeout = cfg.get("idle_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(300);
+                idle_timeout = cfg.get("idle_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(engine_idle);
                 cleanup_timeout = cfg.get("cleanup_timeout").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(2592000);
                 max_rings = cfg.get("max_rings").and_then(|v| v.as_integer()).map(|v| v as u64).unwrap_or(20);
             }
@@ -3985,6 +4316,105 @@ async fn handle_compress_exec(
     }))
 }
 
+async fn handle_compress_settings(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("modules").join("compress.toml");
+
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut toml_val: toml::Value = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+
+    let compress = toml_val
+        .as_table_mut()
+        .map(|t| t.entry("compress").or_insert(toml::Value::Table(toml::map::Map::new())))
+        .and_then(|v| v.as_table_mut());
+    if let Some(t) = compress {
+        if let Some(blocks) = payload.get("blocks").and_then(|v| v.as_u64()) {
+            t.insert("blocks".into(), toml::Value::Integer(blocks as i64));
+        }
+        if let Some(threshold) = payload.get("threshold").and_then(|v| v.as_u64()) {
+            t.insert("threshold".into(), toml::Value::Integer(threshold as i64));
+        }
+        if let Some(auto_threshold) = payload.get("auto_threshold").and_then(|v| v.as_bool()) {
+            t.insert("auto_threshold".into(), toml::Value::Boolean(auto_threshold));
+        }
+    }
+
+    match std::fs::write(&config_path, toml_val.to_string()) {
+        Ok(_) => Json(serde_json::json!({"status": "ok"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("保存失败: {}", e)})),
+    }
+}
+
+async fn handle_compress_settings_get(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("modules").join("compress.toml");
+
+    let toml_val: toml::Value = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+
+    let blocks = toml_val
+        .get("compress").and_then(|c| c.get("blocks")).and_then(|v| v.as_integer()).unwrap_or(5);
+    let threshold = toml_val
+        .get("compress").and_then(|c| c.get("threshold")).and_then(|v| v.as_integer()).unwrap_or(100);
+    let auto_threshold = toml_val
+        .get("compress").and_then(|c| c.get("auto_threshold")).and_then(|v| v.as_bool()).unwrap_or(false);
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "data": {
+            "blocks": blocks,
+            "threshold": threshold,
+            "auto_threshold": auto_threshold,
+        }
+    }))
+}
+
+async fn handle_compress_settings_ser(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = std::path::Path::new(&home)
+        .join(".tremolite").join("profiles").join(&state.profile_name)
+        .join("modules").join("compress.toml");
+
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // 用纯字符串构建 TOML，确保格式正确
+    let blocks = payload.get("blocks").and_then(|v| v.as_u64()).unwrap_or(5);
+    let threshold = payload.get("threshold").and_then(|v| v.as_u64()).unwrap_or(100);
+    let auto_threshold = payload.get("auto_threshold").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let content = format!(
+        "[compress]\nblocks = {}\nthreshold = {}\nauto_threshold = {}\n",
+        blocks, threshold, auto_threshold
+    );
+
+    match std::fs::write(&config_path, &content) {
+        Ok(_) => Json(serde_json::json!({"status": "ok"})),
+        Err(e) => Json(serde_json::json!({"status": "error", "message": format!("保存失败: {}", e)})),
+    }
+}
+
 async fn handle_session_config_save(
     Extension(state): Extension<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
@@ -4085,6 +4515,30 @@ async fn handle_session_activate(
     }
 }
 
+async fn handle_session_cooldown(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let session_id = payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    if session_id.is_empty() {
+        return Json(serde_json::json!({"status": "error", "message": "缺少 session_id 参数"}));
+    }
+
+    let result: Option<Result<String, String>> = state.modules.as_ref().and_then(|mods| {
+        mods.with_module_mut("session", |m| {
+            m.as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::SessionModule>())
+                .map(|sm| sm.cooldown_session(session_id))
+        }).flatten()
+    });
+
+    match result {
+        Some(Ok(msg)) => Json(serde_json::json!({"status": "ok", "message": msg})),
+        Some(Err(e)) => Json(serde_json::json!({"status": "error", "message": e})),
+        None => Json(serde_json::json!({"status": "error", "message": "模块不可用"})),
+    }
+}
+
 /// 确定记忆文件目录（优先配置包，回退 data 目录）
 fn memory_dir_path(home: &str) -> (std::path::PathBuf, bool) {
     let profile_path = std::path::Path::new(home).join(".tremolite/profiles/aoi/data/memory");
@@ -4093,6 +4547,62 @@ fn memory_dir_path(home: &str) -> (std::path::PathBuf, bool) {
     } else {
         (std::path::Path::new(home).join(".tremolite/data/memory"), false)
     }
+}
+
+// ─── Handler: 代谢配置（GET + POST）────────────────
+
+/// 获取当前的代谢配置
+async fn handle_metabolism_get(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_path = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("modules/metabolism.toml");
+    let toml_str = std::fs::read_to_string(&profile_path).unwrap_or_default();
+    let cfg: serde_json::Value = toml::from_str(&toml_str)
+        .map(|v: toml::Value| {
+            serde_json::to_value(&v).unwrap_or(serde_json::json!({}))
+        })
+        .unwrap_or(serde_json::json!({}));
+    Json(serde_json::json!({
+        "status": "ok",
+        "data": cfg,
+        "path": profile_path.to_string_lossy().to_string(),
+    }))
+}
+
+/// 保存代谢配置
+async fn handle_metabolism_save(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let profile_path = std::path::Path::new(&home)
+        .join(".tremolite/profiles")
+        .join(&state.profile_name)
+        .join("modules/metabolism.toml");
+    if let Some(parent) = profile_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let config = payload.get("config").or(Some(&payload));
+    let toml_str = match config {
+        Some(v) => {
+            let toml_val: toml::Value = serde_json::from_value(v.clone())
+                .or_else(|_| serde_json::from_str(&serde_json::to_string(v).unwrap_or_default()))
+                .unwrap_or(toml::Value::Table(toml::value::Table::new()));
+            toml::to_string_pretty(&toml_val).unwrap_or_default()
+        }
+        None => String::new(),
+    };
+    if !toml_str.is_empty() {
+        if let Err(e) = std::fs::write(&profile_path, &toml_str) {
+            return Json(serde_json::json!({"status": "error", "error": format!("写入失败: {}", e)}));
+        }
+        tracing::info!("metabolism: config saved to {:?}", profile_path);
+    }
+    Json(serde_json::json!({"status": "ok"}))
 }
 
 /// 读取 JSON 文件为 Value

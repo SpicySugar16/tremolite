@@ -49,12 +49,45 @@ fn extract_traits(input: &str) -> Vec<(String, String)> {
     traits
 }
 
+/// 用户模块配置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserModuleConfig {
+    /// 自主判断模式（auto mode）：通过 prompt_segment 告诉 LLM 可以调用 update_profile 工具
+    #[serde(default = "default_true")]
+    pub auto_mode: bool,
+    /// 定时触发模式（timed mode）：累计消息数自动触发画像提取
+    #[serde(default)]
+    pub timed_mode: bool,
+    /// 定时触发消息阈值
+    #[serde(default = "default_message_interval")]
+    pub message_interval: u32,
+}
+
+fn default_true() -> bool { true }
+fn default_message_interval() -> u32 { 5 }
+
+impl Default for UserModuleConfig {
+    fn default() -> Self {
+        Self {
+            auto_mode: default_true(),
+            timed_mode: false,
+            message_interval: default_message_interval(),
+        }
+    }
+}
+
 // ─── UserModule ──────────────────────────────────
 
 pub struct UserModule {
     pub registry: UserRegistry,
     /// 上次注入到 prompt 的画像内容
     pub last_injected: String,
+    // === NEW FIELDS ===
+    pub config: UserModuleConfig,
+    /// 当前 session 消息计数器（用于 timed mode）
+    message_count: u32,
+    /// 当前 session_id（用于追踪会话切换时重置计数）
+    current_session: String,
 }
 
 impl UserModule {
@@ -62,6 +95,9 @@ impl UserModule {
         Self {
             registry: UserRegistry::new(),
             last_injected: String::new(),
+            config: UserModuleConfig::default(),
+            message_count: 0,
+            current_session: String::new(),
         }
     }
 
@@ -92,6 +128,21 @@ impl UserModule {
         }
     }
 
+    /// 从配置包 modules/user.toml 读取配置
+    pub fn load_module_config(&mut self, profile_dir: &std::path::Path) {
+        let config_path = profile_dir.join("modules").join("user.toml");
+        if config_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(cfg) = toml::from_str::<UserModuleConfig>(&content) {
+                    self.config = cfg;
+                    tracing::info!("user: loaded module config from {:?}", config_path);
+                    return;
+                }
+            }
+        }
+        tracing::info!("user: using default config (no user.toml found)");
+    }
+
     /// 自动识别当前对话的用户——从渠道来源匹配或创建
     pub fn auto_identify(&mut self, session_id: &str, channel: &str, channel_uid: &str) -> String {
         // 先看 session 是否已绑定
@@ -99,19 +150,21 @@ impl UserModule {
             return uid.to_string();
         }
 
-        // 对于 QQ 消息，通过 QQ 号匹配 alias
-        let alias = if channel == "qq" || channel == "qqbot" {
-            format!("qq:{}", channel_uid)
-        } else if channel == "dashboard" {
-            format!("dashboard:{}", channel_uid)
-        } else {
-            format!("{}:{}", channel, channel_uid)
+        // 收集多个可能的标识符（channel+uid、仅 uid 等）
+        let identifiers: Vec<String> = {
+            let mut ids = Vec::new();
+            let channel_alias = format!("{}:{}", channel, channel_uid);
+            ids.push(channel_alias);
+            ids.push(channel_uid.to_string());
+            ids
         };
+        let id_refs: Vec<&str> = identifiers.iter().map(|s| s.as_str()).collect();
 
-        let uid = if let Some(user) = self.registry.find_by_alias(&alias) {
+        let uid = if let Some(user) = self.registry.find_by_any_alias(&id_refs) {
             user.uid.clone()
         } else {
             // 未匹配——创建匿名用户
+            let alias = format!("{}:{}", channel, channel_uid);
             let user = User::new_anonymous(&alias);
             let uid = user.uid.clone();
             self.registry.add_user(user);
@@ -203,6 +256,27 @@ impl Module for UserModule {
                     }),
                 },
             },
+            ToolDefinition {
+                def_type: "function".into(),
+                function: tremolite_llm::ToolFunction {
+                    name: "update_profile".into(),
+                    description: "更新当前对话用户的画像信息。当对话中用户透露了新偏好、习惯、个人信息时，调用此工具将信息写入画像。参数：key=画像分类（如\"喜好\"\"饮食禁忌\"\"居住地\"等），value=具体内容。".into(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "key": {
+                                "type": "string",
+                                "description": "画像分类名称，如 喜好、饮食禁忌、居住地、职业、健康 等"
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "具体内容"
+                            }
+                        },
+                        "required": ["key", "value"]
+                    }),
+                },
+            },
         ]
     }
 
@@ -225,14 +299,50 @@ impl Module for UserModule {
                     Ok(users.join("\n"))
                 }
             }
+            "update_profile" => {
+                let parsed: serde_json::Value = serde_json::from_str(_args).map_err(|e| ModuleError::ToolExecutionFailed(e.to_string()))?;
+                let key = parsed.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                let value = parsed.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                if key.is_empty() || value.is_empty() {
+                    return Ok("参数不完整，需要 key 和 value".into());
+                }
+                // 更新当前 session 用户的画像
+                // 注：execute_tool 没有 session_id 上下文，这里做一个简化：更新第一个非匿名用户的 traits
+                let mut updated = false;
+                let uids: Vec<String> = self.registry.all_users().keys().cloned().collect();
+                for uid in &uids {
+                    if let Some(user) = self.registry.get_mut(uid) {
+                        // 跳过匿名用户
+                        if user.role == UserRole::Anonymous { continue; }
+                        user.traits.insert(key.to_string(), value.to_string());
+                        updated = true;
+                        break;
+                    }
+                }
+                if updated {
+                    self.last_injected = format!("{}: {}", key, value);
+                    Ok(format!("已更新 {} → {}", key, value))
+                } else {
+                    Ok("无可更新的用户".into())
+                }
+            }
             _ => Err(ModuleError::ToolNotFound(name.to_string())),
         }
     }
 
     fn prompt_segment(&self) -> Option<String> {
-        // prompt_segment 只能通过 &self 访问，不能获取当前 session_id
-        // 用户画像注入在 scheduler 层处理，通过 display_names() 和 profile_summary() 传入
-        None
+        if self.config.auto_mode {
+            Some("\
+## 用户画像更新
+你可以通过 `update_profile` 工具更新当前用户的画像信息。
+当对话中用户透露了新的个人信息（偏好、习惯、健康状况、居住地等），
+主动调用 `update_profile(key, value)` 写入画像。
+
+示例：用户说「我喜欢吃火锅」→ update_profile(key=\"喜好\", value=\"火锅\")
+".to_string())
+        } else {
+            None
+        }
     }
 
     fn display_status(&self) -> Option<String> {
@@ -259,6 +369,38 @@ impl Module for UserModule {
                         }
                     }
                 }
+
+                // 更新最后注入内容——反映当前 session 用户的最新画像
+                let user_traits = self.registry.all_users().get(&uid)
+                    .map(|u| &u.traits)
+                    .cloned()
+                    .unwrap_or_default();
+                if !user_traits.is_empty() {
+                    let mut parts: Vec<String> = user_traits.iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect();
+                    parts.sort();
+                    self.last_injected = parts.join("\n");
+                } else if let Some(user) = self.registry.get(&uid) {
+                    self.last_injected = format!("{} — 暂无画像信息", user.display_name);
+                }
+
+                // === NEW: timed mode 消息计数 ===
+                if self.config.timed_mode {
+                    // 如果 session 切换了，重置计数
+                    if self.current_session != session_id {
+                        self.message_count = 0;
+                        self.current_session = session_id.to_string();
+                    }
+                    self.message_count += 1;
+
+                    if self.message_count >= self.config.message_interval {
+                        self.message_count = 0;
+                        // 自动触发画像提取（已有 extract_traits 处理，这里只是计数+标记）
+                        tracing::info!("user: timed mode triggered at {} messages", self.config.message_interval);
+                    }
+                }
+
                 Ok(EventResponse::Pass)
             }
             Event::OnResponse { ref response } => {

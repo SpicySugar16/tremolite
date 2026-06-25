@@ -246,6 +246,23 @@ fn main() {
     let _ = engine.register_module(Box::new(
         MemoryModule::new(memory_data_base).with_names(&ai_name, &username)
     ));
+
+    // 从 metabolism.toml 加载代谢配置
+    let metabolism_cfg_path = profile_dir.join("modules").join("metabolism.toml");
+    if let Ok(content) = std::fs::read_to_string(&metabolism_cfg_path) {
+        let cfg = tremolite_memory::MetabolismConfig::from_toml(&content);
+        let _ = engine.modules.with_module_mut("memory", |m| {
+            if let Some(mm) = m
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<tremolite_core::MemoryModule>())
+            {
+                mm.manager_mut().metabolism.config = cfg;
+                // 设置配置路径，允许运行时读写
+                mm.set_metabolism_config_path(metabolism_cfg_path.clone());
+            }
+        });
+    }
+
     // 从 session.toml 读取会话配置
     let mut session_idle_timeout: u64 = 1800;
     let mut session_cleanup_timeout: u64 = 2592000;
@@ -339,6 +356,8 @@ fn main() {
 
     let mut user_module = UserModule::new();
     user_module.load_config(None, &username, &ai_name);
+    // 从配置包加载模块配置（auto_mode / timed_mode / message_interval）
+    user_module.load_module_config(&profile_dir);
     let _ = engine.register_module(Box::new(user_module));
 
     // 注入 cron_tasks.json 路径——让 CronModule 每 tick 从 API 写的文件加载

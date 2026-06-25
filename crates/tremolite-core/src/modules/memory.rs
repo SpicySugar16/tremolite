@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use tremolite_memory::{MemoryManager, MemoryStats};
+use tremolite_memory::{MemoryManager, MemoryStats, MetabolismConfig};
 use tremolite_llm::{ToolDefinition, ToolFunction};
 use crate::module::{Module, Capability, ModuleError, Event, EventResponse, EventContext};
 
@@ -12,6 +12,8 @@ pub struct MemoryModule {
     manager: MemoryManager,
     ai_name: String,
     username: String,
+    /// 代谢配置文件路径（可选，用于运行时读数/写入配置包）
+    metabolism_cfg_path: Option<std::path::PathBuf>,
 }
 
 impl MemoryModule {
@@ -20,6 +22,7 @@ impl MemoryModule {
             manager: MemoryManager::new(data_dir.join("memory")),
             ai_name: "葵".to_string(),
             username: "琳玲".to_string(),
+            metabolism_cfg_path: None,
         }
     }
 
@@ -47,6 +50,50 @@ impl MemoryModule {
 
     pub fn manager(&self) -> &MemoryManager { &self.manager }
     pub fn manager_mut(&mut self) -> &mut MemoryManager { &mut self.manager }
+
+    /// 应用代谢配置
+    pub fn with_metabolism_config(mut self, cfg: MetabolismConfig) -> Self {
+        self.manager.metabolism = self.manager.metabolism.with_config(cfg);
+        self
+    }
+
+    /// 设置代谢配置文件路径（用于运行时从配置包读写）
+    pub fn with_metabolism_config_path(mut self, path: PathBuf) -> Self {
+        self.metabolism_cfg_path = Some(path);
+        self
+    }
+
+    /// 运行时设置代谢配置文件路径（通过 &mut self）
+    pub fn set_metabolism_config_path(&mut self, path: PathBuf) {
+        self.metabolism_cfg_path = Some(path);
+    }
+
+    /// 从配置包文件重载代谢配置
+    pub fn reload_metabolism_config(&mut self) {
+        if let Some(ref path) = self.metabolism_cfg_path {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                let cfg = MetabolismConfig::from_toml(&content);
+                self.manager.metabolism.config = cfg;
+                tracing::info!("memory: reloaded metabolism config from {:?}", path);
+            }
+        }
+    }
+
+    /// 将当前代谢配置写入配置包文件
+    pub fn save_metabolism_config(&self) -> Result<(), String> {
+        if let Some(ref path) = self.metabolism_cfg_path {
+            let toml_str = toml::to_string_pretty(&self.manager.metabolism.config)
+                .map_err(|e| e.to_string())?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(path, toml_str).map_err(|e| e.to_string())?;
+            tracing::info!("memory: saved metabolism config to {:?}", path);
+            Ok(())
+        } else {
+            Err("metabolism config path not set".into())
+        }
+    }
 
     /// 更新用户画像快速库——写入一条碎片到指定身份
     pub fn update_profile(
@@ -280,6 +327,13 @@ impl Module for MemoryModule {
                     0.6, channel.clone(), sender.clone(),
                 );
                 let _ = self.manager.flush_all();
+                // 递增计数——驱动计数模式代谢
+                self.manager.metabolism.tick();
+                // 代谢循环——自动提升/降级 L1→L2→L3→RAM→Disk
+                let actions = self.manager.metabolize();
+                if !actions.is_empty() {
+                    tracing::debug!("memory: metabolized {} entries", actions.len());
+                }
                 Ok(EventResponse::Pass)
             }
             Event::OnResponse { response } => {
@@ -289,6 +343,13 @@ impl Module for MemoryModule {
                     vec!["response".into(), tag], 0.5, "internal".into(), String::new(),
                 );
                 let _ = self.manager.flush_all();
+                // 递增计数——驱动计数模式代谢
+                self.manager.metabolism.tick();
+                // 代谢循环
+                let actions = self.manager.metabolize();
+                if !actions.is_empty() {
+                    tracing::debug!("memory: metabolized {} entries", actions.len());
+                }
                 Ok(EventResponse::Pass)
             }
             Event::Shutdown => {

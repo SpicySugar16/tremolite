@@ -31,6 +31,9 @@ pub struct SessionState {
     pub closed: bool,
     /// 关闭时间戳
     pub closed_at: Option<u64>,
+    /// 是否手动激活——手动激活的 session 不会被自动创建新变体
+    #[serde(default)]
+    pub manually_activated: bool,
 }
 
 impl SessionState {
@@ -42,6 +45,7 @@ impl SessionState {
             shared: true,
             closed: false,
             closed_at: None,
+            manually_activated: false,
         }
     }
 
@@ -51,7 +55,6 @@ impl SessionState {
         self.closed = false;
         self.closed_at = None;
     }
-
     /// 判断是否已过期（超过 ttl 未活跃）
     pub fn is_expired(&self, ttl_secs: u64) -> bool {
         now_secs().saturating_sub(self.last_active) > ttl_secs
@@ -165,6 +168,28 @@ impl SessionManager {
             self.sessions.remove(id);
         }
         stale
+    }
+
+    /// 关闭同一 base 前缀下所有其他活跃 session——同一用户只保留一个活跃变体
+    pub fn close_in_base_except(&mut self, keep_id: &str) -> Vec<String> {
+        // 提取 base 名（去掉 _ 后缀）
+        let base = keep_id.split('_').next().unwrap_or(keep_id);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut closed = Vec::new();
+        for (id, state) in self.sessions.iter_mut() {
+            if id != keep_id && !state.closed {
+                let id_base = id.split('_').next().unwrap_or(id);
+                if id_base == base {
+                    state.closed = true;
+                    state.closed_at = Some(now);
+                    closed.push(id.clone());
+                }
+            }
+        }
+        closed
     }
 
     /// 关闭同一通道中除 keep_id 外的所有其他活跃 session

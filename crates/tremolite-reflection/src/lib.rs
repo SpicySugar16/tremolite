@@ -49,66 +49,83 @@ impl ReflectionEngine {
     /// 通过 LLM 分析用户模式/偏好/状态，写结论到 L2
     /// 返回分析文本（供 prompt_segment 缓存）
     fn run_dialectic(engine: &EngineHandle) -> Option<String> {
-        // 通过 EngineHandle 访问 MemoryModule
-        let result: Option<Option<String>> = engine.with_module("memory", |m| {
+        // Phase 1: 提取数据（在锁内，快速操作）
+        let extracted: Option<(u64, Vec<String>, String, std::sync::Arc<ProviderRegistry>)> =
+            engine.with_module("memory", |m| {
+                let mm = match m.as_any_mut().and_then(|a| a.downcast_mut::<MemoryModule>()) {
+                    Some(mm) => mm,
+                    None => {
+                        tracing::warn!("reflection: memory module not found for dialectic");
+                        return None;
+                    }
+                };
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                let recent = mm.recent_entries("reflection", 20);
+                let conversation: Vec<String> = recent.iter().filter_map(|e| {
+                    let c = &e.content;
+                    if c.starts_with("kamisama: ") || c.starts_with("葵: ") {
+                        Some(c.clone())
+                    } else {
+                        None
+                    }
+                }).collect();
+
+                if conversation.is_empty() {
+                    tracing::debug!("reflection: no recent conversation for dialectic");
+                    return None;
+                }
+
+                let current_card = mm.manager_mut().l2.get(KEY_PEER_CARD)
+                    .map(|e| e.content.clone())
+                    .unwrap_or_default();
+
+                let providers = engine.get_providers()?;
+
+                Some((now, conversation, current_card, providers))
+            }).and_then(|x| x);  // flatten Option<Option<T>> → Option<T>
+
+        let (now, conversation, current_card, providers) = match extracted {
+            Some(data) => data,
+            None => return None,
+        };
+
+        // Phase 2: LLM 调用（在锁外，不阻塞模块注册表）
+        let analysis = Self::analyze_with_llm(&providers, &conversation, &current_card);
+
+        let content = match &analysis {
+            Some(text) => {
+                format!(
+                    "[dialectic:{}]\nconversation_entries: {}\nprevious_card: {}\nanalysis:\n{}",
+                    now,
+                    conversation.len(),
+                    &current_card.chars().take(80).collect::<String>(),
+                    text,
+                )
+            }
+            None => {
+                format!(
+                    "[dialectic:{}]\nconversation_entries: {}\n(llm unavailable — degraded)",
+                    now,
+                    conversation.len(),
+                )
+            }
+        };
+
+        // Phase 3: 写回结果（再进锁，快速操作）
+        engine.with_module("memory", |m| {
             let mm = match m.as_any_mut().and_then(|a| a.downcast_mut::<MemoryModule>()) {
                 Some(mm) => mm,
                 None => {
-                    tracing::warn!("reflection: memory module not found for dialectic");
-                    return None;
+                    tracing::warn!("reflection: memory module not found for writing dialectic");
+                    return;
                 }
             };
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            // 1. 读 L1 最近 20 条对话
-            let recent = mm.recent_entries("reflection", 20);
-            let conversation: Vec<String> = recent.iter().filter_map(|e| {
-                let c = &e.content;
-                if c.starts_with("kamisama: ") || c.starts_with("葵: ") {
-                    Some(c.clone())
-                } else {
-                    None
-                }
-            }).collect();
-
-            if conversation.is_empty() {
-                tracing::debug!("reflection: no recent conversation for dialectic");
-                return None;
-            }
-
-            // 2. 读当前 peer card
-            let current_card = mm.manager_mut().l2.get(KEY_PEER_CARD)
-                .map(|e| e.content.clone())
-                .unwrap_or_default();
-
-            // 3. 通过 LLM 分析对话
-            let analysis = Self::analyze_with_llm(engine, &conversation, &current_card);
-
-            let content = match &analysis {
-                Some(text) => {
-                    format!(
-                        "[dialectic:{}]\nconversation_entries: {}\nprevious_card: {}\nanalysis:\n{}",
-                        now,
-                        conversation.len(),
-                        &current_card.chars().take(80).collect::<String>(),
-                        text,
-                    )
-                }
-                None => {
-                    // LLM 不可用，退化到简单摘要
-                    format!(
-                        "[dialectic:{}]\nconversation_entries: {}\n(llm unavailable — degraded)",
-                        now,
-                        conversation.len(),
-                    )
-                }
-            };
-
-            // 4. 写入 L2（只打 dialectic + profile 标签，反思走正常代谢降级）
             let key = format!("{}:{}", KEY_DIALECTIC_PREFIX, now);
             mm.manager_mut().l2.set(
                 &key,
@@ -119,7 +136,6 @@ impl ReflectionEngine {
 
             tracing::info!("reflection: wrote dialectic to L2 key='{}'", key);
 
-            // 5. 如有 LLM 分析结果，写入 ProfileCache
             if let Some(analysis_text) = &analysis {
                 let mut traits = std::collections::HashMap::new();
                 traits.insert("dialectic_summary".into(), analysis_text.chars().take(200).collect());
@@ -132,22 +148,15 @@ impl ReflectionEngine {
                     None,
                 );
             }
-
-            // 返回 LLM 分析文本（供 prompt_segment 缓存）
-            analysis
         });
 
-        match result {
-            Some(Some(text)) => {
+        match &analysis {
+            Some(text) => {
                 tracing::debug!("reflection: dialectic produced analysis ({} chars)", text.len());
-                Some(text)
-            }
-            Some(None) => {
-                tracing::debug!("reflection: dialectic ran but no LLM analysis available");
-                None
+                Some(text.clone())
             }
             None => {
-                tracing::warn!("reflection: failed to access memory module for dialectic");
+                tracing::debug!("reflection: dialectic ran but no LLM analysis available");
                 None
             }
         }
@@ -155,11 +164,10 @@ impl ReflectionEngine {
 
     /// 通过 LLM 分析对话，返回分析文本
     fn analyze_with_llm(
-        engine: &EngineHandle,
+        providers: &std::sync::Arc<ProviderRegistry>,
         conversation: &[String],
         card: &str,
     ) -> Option<String> {
-        let providers: std::sync::Arc<ProviderRegistry> = engine.get_providers()?;
         let provider = providers.get_default()?;
 
         // 构建分析 prompt

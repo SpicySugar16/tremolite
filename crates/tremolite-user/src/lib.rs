@@ -2,6 +2,44 @@ use std::collections::HashMap;
 
 // ─── 数据模型 ─────────────────────────────────────
 
+/// 别名映射表——包含多种标识符，在命中阶段逐一比对
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct AliasTable {
+    /// 账号名
+    #[serde(default)]
+    pub name: String,
+    /// QQ号
+    #[serde(default)]
+    pub qq: String,
+    /// 显示名
+    #[serde(default)]
+    pub display_name: String,
+    /// 其他自定义别名（群号、webhook来源等）
+    #[serde(default)]
+    pub others: Vec<String>,
+}
+
+impl AliasTable {
+    /// 检查给定的标识符是否匹配本表的任何一项
+    pub fn matches(&self, identifier: &str) -> bool {
+        if !self.name.is_empty() && self.name == identifier { return true; }
+        if !self.qq.is_empty() && self.qq == identifier { return true; }
+        if !self.display_name.is_empty() && self.display_name == identifier { return true; }
+        if self.others.iter().any(|o| o == identifier) { return true; }
+        false
+    }
+
+    /// 获取所有别名值的列表（用于构建索引）
+    pub fn all_values(&self) -> Vec<String> {
+        let mut vals = Vec::new();
+        if !self.name.is_empty() { vals.push(self.name.clone()); }
+        if !self.qq.is_empty() { vals.push(self.qq.clone()); }
+        if !self.display_name.is_empty() { vals.push(self.display_name.clone()); }
+        vals.extend(self.others.clone());
+        vals
+    }
+}
+
 /// 用户角色
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum UserRole {
@@ -41,8 +79,9 @@ pub struct User {
     pub avatar: String,
     pub ai_name: String,
     pub ai_avatar: String,
-    /// 跨渠道别名（QQ号、webhook来源等）
-    pub aliases: Vec<String>,
+    /// 别名映射表
+    #[serde(default)]
+    pub alias_table: AliasTable,
     /// 画像碎片 key-value
     pub traits: HashMap<String, String>,
     /// 创建时间
@@ -58,7 +97,7 @@ impl User {
             avatar: String::new(),
             ai_name: ai_name.to_string(),
             ai_avatar: String::new(),
-            aliases: Vec::new(),
+            alias_table: AliasTable::default(),
             traits: HashMap::new(),
             created_at: now_secs(),
         }
@@ -73,7 +112,10 @@ impl User {
             avatar: String::new(),
             ai_name: "透闪石".into(),
             ai_avatar: String::new(),
-            aliases: vec![source_alias.to_string()],
+            alias_table: AliasTable {
+                others: vec![source_alias.to_string()],
+                ..Default::default()
+            },
             traits: HashMap::new(),
             created_at: now_secs(),
         }
@@ -107,6 +149,12 @@ pub struct AccountConfig {
     pub avatar: String,
     #[serde(default)]
     pub ai_avatar: String,
+    /// 账号名
+    #[serde(default)]
+    pub name: String,
+    /// QQ号
+    #[serde(default)]
+    pub qq: String,
     /// 绑定的渠道标识（QQ号等），用于自动识别
     #[serde(default)]
     pub aliases: Vec<String>,
@@ -125,6 +173,8 @@ pub fn migrate_from_display(username: &str, ai_name: &str) -> UserConfig {
             ai_name: ai_name.to_string(),
             avatar: String::new(),
             ai_avatar: String::new(),
+            name: String::new(),
+            qq: String::new(),
             aliases: Vec::new(),
         }],
     }
@@ -160,6 +210,12 @@ impl UserRegistry {
                 "user" => UserRole::User,
                 _ => UserRole::Anonymous,
             };
+            let alias_table = AliasTable {
+                name: acct.name.clone(),
+                qq: acct.qq.clone(),
+                display_name: acct.display_name.clone(),
+                others: acct.aliases.clone(),
+            };
             let user = User {
                 uid: acct.uid.clone(),
                 display_name: acct.display_name.clone(),
@@ -167,13 +223,13 @@ impl UserRegistry {
                 avatar: acct.avatar.clone(),
                 ai_name: acct.ai_name.clone(),
                 ai_avatar: acct.ai_avatar.clone(),
-                aliases: acct.aliases.clone(),
+                alias_table,
                 traits: HashMap::new(),
                 created_at: now_secs(),
             };
             // 注册 alias
-            for alias in &user.aliases {
-                self.alias_index.insert(alias.clone(), user.uid.clone());
+            for alias in user.alias_table.all_values() {
+                self.alias_index.insert(alias, user.uid.clone());
             }
             self.users.insert(user.uid.clone(), user);
         }
@@ -193,10 +249,20 @@ impl UserRegistry {
     }
 
     pub fn add_user(&mut self, user: User) {
-        for alias in &user.aliases {
-            self.alias_index.insert(alias.clone(), user.uid.clone());
+        for alias in user.alias_table.all_values() {
+            self.alias_index.insert(alias, user.uid.clone());
         }
         self.users.insert(user.uid.clone(), user);
+    }
+
+    /// 遍历 identifiers 列表逐一用 find_by_alias 查找，返回第一个匹配到的用户
+    pub fn find_by_any_alias(&self, identifiers: &[&str]) -> Option<&User> {
+        for id in identifiers {
+            if let Some(user) = self.find_by_alias(id) {
+                return Some(user);
+            }
+        }
+        None
     }
 
     // ─── session ↔ uid 映射 ─────────────────
@@ -248,7 +314,7 @@ mod tests {
     fn test_anonymous_user() {
         let u = User::new_anonymous("qq:12345");
         assert_eq!(u.role, UserRole::Anonymous);
-        assert!(u.aliases.contains(&"qq:12345".to_string()));
+        assert!(u.alias_table.others.contains(&"qq:12345".to_string()));
     }
 
     #[test]
@@ -263,6 +329,8 @@ mod tests {
                     ai_name: "葵".into(),
                     avatar: String::new(),
                     ai_avatar: String::new(),
+                    name: String::new(),
+                    qq: String::new(),
                     aliases: vec!["qq:2513924725".into()],
                 },
             ],
