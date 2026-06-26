@@ -243,9 +243,30 @@ fn main() {
     if !memory_data_base.exists() {
         std::fs::create_dir_all(&memory_data_base).unwrap_or(());
     }
-    let _ = engine.register_module(Box::new(
-        MemoryModule::new(memory_data_base).with_names(&ai_name, &username)
-    ));
+    let mut memory_module = MemoryModule::new(memory_data_base).with_names(&ai_name, &username);
+    // 从 profile 读 BGE 嵌入配置
+    let embedding_cfg_path = profile_dir.join("variables.toml");
+    if let Ok(content) = std::fs::read_to_string(&embedding_cfg_path) {
+        if let Ok(toml_val) = content.parse::<toml::Value>() {
+            if let Some(tbl) = toml_val.get("api") {
+                let sf_key_raw = tbl.get("siliconflow_key").and_then(|v|v.as_str()).unwrap_or("");
+                let sf_key = if sf_key_raw.starts_with("${") {
+                    let var_name = sf_key_raw.trim_start_matches("${").trim_end_matches('}');
+                    std::env::var(var_name).unwrap_or_default()
+                } else {
+                    sf_key_raw.to_string()
+                };
+                let sf_url = tbl.get("siliconflow_url").and_then(|v|v.as_str()).unwrap_or("https://api.siliconflow.cn/v1");
+                let sf_model = tbl.get("siliconflow_embedding_model").and_then(|v|v.as_str()).unwrap_or("BAAI/bge-large-zh-v1.5");
+                if !sf_key.is_empty() {
+                    let emb_url = format!("{}/embeddings", sf_url.trim_end_matches('/'));
+                    memory_module.manager_mut().with_embedder(&sf_key, &emb_url, sf_model);
+                    println!("  Embedding: SiliconFlow {} ✓", sf_model);
+                }
+            }
+        }
+    }
+    let _ = engine.register_module(Box::new(memory_module));
 
     // 从 metabolism.toml 加载代谢配置
     let metabolism_cfg_path = profile_dir.join("modules").join("metabolism.toml");
