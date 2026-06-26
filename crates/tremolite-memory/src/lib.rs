@@ -213,7 +213,7 @@ pub struct L2ProfileMemory {
 
 impl L2ProfileMemory {
     pub fn new(path: PathBuf) -> Self {
-        let max_entries = 200;
+        let max_entries = 50;
         let store = if path.exists() {
             std::fs::read_to_string(&path)
                 .ok()
@@ -457,7 +457,7 @@ impl L3IndexMemory {
             keywords: HashMap::new(),
             last_access: HashMap::new(),
             created_at: HashMap::new(),
-            max_entries: 1000,
+            max_entries: 250,
             embeddings: HashMap::new(),
         }
     }
@@ -563,6 +563,44 @@ impl L3IndexMemory {
         }
         evicted
     }
+
+    pub fn flush(&self, l3_path: &PathBuf) -> Result<(), String> {
+        if let Some(parent) = l3_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let kw_path = l3_path.with_file_name("l3_keywords.json");
+        let kw_json = serde_json::to_string_pretty(&self.keywords).map_err(|e| e.to_string())?;
+        std::fs::write(&kw_path, kw_json).map_err(|e| e.to_string())?;
+        let ts_path = l3_path.with_file_name("l3_timestamps.json");
+        let ts: HashMap<u64,(u64,u64)> = self.keywords.keys().map(|id| {
+            (*id, (self.created_at.get(id).copied().unwrap_or(0), self.last_access.get(id).copied().unwrap_or(0)))
+        }).collect();
+        let ts_json = serde_json::to_string_pretty(&ts).map_err(|e| e.to_string())?;
+        std::fs::write(&ts_path, ts_json).map_err(|e| e.to_string())?;
+        let emb_path = l3_path.with_file_name("l3_embeddings.json");
+        let emb_json = serde_json::to_string_pretty(&self.embeddings).map_err(|e| e.to_string())?;
+        std::fs::write(&emb_path, emb_json).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn restore(l3_path: &PathBuf) -> Self {
+        let mut l3 = Self::new();
+        let kw_path = l3_path.with_file_name("l3_keywords.json");
+        if let Ok(json) = std::fs::read_to_string(&kw_path) {
+            if let Ok(kw) = serde_json::from_str::<HashMap<u64,String>>(&json) { l3.keywords = kw; }
+        }
+        let ts_path = l3_path.with_file_name("l3_timestamps.json");
+        if let Ok(json) = std::fs::read_to_string(&ts_path) {
+            if let Ok(ts) = serde_json::from_str::<HashMap<u64,(u64,u64)>>(&json) {
+                for (id,(c,l)) in ts { l3.created_at.insert(id,c); l3.last_access.insert(id,l); }
+            }
+        }
+        let emb_path = l3_path.with_file_name("l3_embeddings.json");
+        if let Ok(json) = std::fs::read_to_string(&emb_path) {
+            if let Ok(emb) = serde_json::from_str::<HashMap<u64,Vec<f32>>>(&json) { l3.embeddings = emb; }
+        }
+        l3
+    }
 }
 
 // ─── RAM: 全量历史 ────────────────────────────────────
@@ -586,7 +624,7 @@ impl RamFileStore {
             base_path,
             ids: HashSet::new(),
             created_at: HashMap::new(),
-            max_entries: 10_000,
+            max_entries: 250,
         }
     }
 
@@ -1245,7 +1283,8 @@ pub enum MetabolicAction {
 
 
 /// 从关键词文本生成粗略向量（字符哈希 + 归一化，同维度，无需嵌入模型）
-fn make_rough_vector(keyword: &str, dim: usize) -> Vec<f32> {
+fn make_rough_vector(keyword: &str) -> Vec<f32> {
+    let dim = 1024usize;
     let mut vec = vec![0.0f32; dim];
     for (i, ch) in keyword.chars().enumerate() {
         let idx = (ch as usize) % dim.max(1);
@@ -1583,6 +1622,14 @@ impl MemoryManager {
         mm
     }
 
+    pub fn with_embedder(&mut self, api_key: &str, api_url: &str, model: &str) {
+        if !api_key.is_empty() {
+            let config = crate::embedding::EmbeddingConfig::default()
+                .with_api_key(api_key).with_api_url(api_url).with_model(model);
+            self.embedder = Some(Box::new(crate::embedding::SiliconFlowEmbedder::new(config)));
+        }
+    }
+
     /// 根据 session_id 获取或创建 L1 buffer
     fn l1_for_session_mut(&mut self, sid: &str) -> &mut L1Buffer {
         self.l1_sessions.entry(sid.to_string())
@@ -1642,19 +1689,9 @@ impl MemoryManager {
 
     /// 从磁盘恢复 L3 索引
     fn restore_l3(&mut self) {
-        if !self.l3_path.exists() {
-            return;
-        }
-        match std::fs::read_to_string(&self.l3_path) {
-            Ok(json) => {
-                if let Ok(entries) = serde_json::from_str::<Vec<IndexEntry>>(&json) {
-                    for e in entries {
-                        self.l3.add(e);
-                    }
-                    tracing::info!("memory: restored {} L3 entries from disk", self.l3.len());
-                }
-            }
-            Err(e) => tracing::warn!("memory: failed to read L3 cache: {}", e),
+        self.l3 = L3IndexMemory::restore(&self.l3_path);
+        if self.l3.len() > 0 {
+            tracing::info!("memory: restored {} L3 entries", self.l3.len());
         }
     }
 
@@ -1834,9 +1871,12 @@ impl MemoryManager {
 
         // L3：搜索索引
         for entry in self.l3.search_by_summary(&lower_query) {
+            let snippet = self.ram.read(entry.id)
+                .map(|txt| txt.chars().take(120).collect::<String>())
+                .unwrap_or_else(|| entry.summary.chars().take(60).collect());
             results.push((
                 MemoryLevel::L3,
-                format!("[索引] {} | tags: {:?}", entry.summary.chars().take(60).collect::<String>(), entry.tags),
+                snippet,
                 0.5,
             ));
         }
@@ -2021,11 +2061,16 @@ impl MemoryManager {
                     if score < dt {
                         // 有用：进 L2
                         if entry.importance >= 0.3 && entry.content.len() >= 10 {
-                            self.l2.set(
+                            let distilled = distill_entry_content(&entry.content);
+                            let emb: Vec<f32> = self.embedder.as_ref()
+                                .and_then(|e| e.embed(&distilled).ok())
+                                .unwrap_or_else(|| make_rough_vector(&distilled));
+                            self.l2.set_with_embedding(
                                 &format!("demoted-{}", entry.id),
-                                entry.content.clone(),
+                                distilled,
                                 entry.tags.clone(),
                                 entry.importance,
+                                emb,
                             );
                             actions.push((entry.id, format!("L1→L2: {}", &entry.content.chars().take(30).collect::<String>()), MetabolicAction::DemoteTo(MemoryLevel::L2)));
                         } else {
@@ -2053,10 +2098,9 @@ impl MemoryManager {
                 let key = &entry.id.to_string();
                 let l2_detailed = self.l2.get_embedding(key);
                 let l2_rough = self.l2.get_rough_embedding(key);
-                // 有粗略向量 → 直接复用；没有 → 从关键词算一个
-                let l3_emb = l2_rough.or_else(|| {
-                    l2_detailed.as_ref().map(|d| make_rough_vector(&keywords, d.len()))
-                });
+                let l3_emb = l2_rough.or_else(|| l2_detailed.clone()).or_else(|| {
+                    self.embedder.as_ref().and_then(|e| e.embed(&keywords).ok())
+                }).or_else(|| Some(make_rough_vector(&keywords)));
                 // 详细向量打包进 RAM（如果有的话）
                 if let Some(ref detailed) = l2_detailed {
                     self.ram.store_vector(entry.id, detailed);
@@ -2107,6 +2151,17 @@ impl MemoryManager {
 
         // ── ProfileCache 独立升降级通道 ──
         self.profile_cache.maintain();
+
+        let combined = self.l3.len() + self.ram.len();
+        if combined > 500 {
+            let demoted = self.l3.evict_demoted(0.5);
+            for entry in &demoted {
+                self.ram.remove(entry.id);
+                let content = format!("[L3降级] {}", entry.summary);
+                self.disk.store_entry(entry.id, &entry.summary, &content, entry.created_at, entry.embedding.clone());
+                actions.push((entry.id, format!("L3→Disk: {}", entry.summary), MetabolicAction::DemoteTo(MemoryLevel::Disk)));
+            }
+        }
 
         actions
     }
@@ -2243,13 +2298,7 @@ impl MemoryManager {
     }
 
     fn save_l3(&mut self) -> Result<(), String> {
-        let entries: Vec<IndexEntry> = self.l3.all_entries().to_vec();
-        let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
-        if let Some(parent) = self.l3_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&self.l3_path, json).map_err(|e| e.to_string())?;
-        Ok(())
+        self.l3.flush(&self.l3_path)
     }
 
     fn save_ram(&mut self) -> Result<(), String> {

@@ -1198,22 +1198,30 @@ async fn handle_engine_mod(
                 })
                 .unwrap_or_default();
 
-            // L3: l3_index.json (HashMap<u64, entry>)
-            let l3: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("l3_index.json")).ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .map(|v| {
-                    v.as_object().map(|obj| {
-                        obj.iter().map(|(key, val)| {
-                            serde_json::json!({
-                                "id": key.parse::<u64>().unwrap_or(0),
-                                "summary": trunc(val.get("summary").and_then(|v| v.as_str()).unwrap_or("")),
-                                "has_embedding": val.get("embedding").is_some(),
-                                "created_at": val.get("created_at").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                            })
-                        }).collect::<Vec<_>>()
-                    }).unwrap_or_default()
-                })
-                .unwrap_or_default();
+            // L3: 新多文件格式
+            let l3: Vec<serde_json::Value> = (|| -> Option<Vec<serde_json::Value>> {
+                let kw_path = memory_dir.join("l3_keywords.json");
+                let ts_path = memory_dir.join("l3_timestamps.json");
+                let emb_path = memory_dir.join("l3_embeddings.json");
+                let keywords: std::collections::HashMap<u64,String> = std::fs::read_to_string(&kw_path).ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())?;
+                let timestamps: std::collections::HashMap<u64,(u64,u64)> = if ts_path.exists() {
+                    std::fs::read_to_string(&ts_path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+                } else { std::collections::HashMap::new() };
+                let embeddings: std::collections::HashMap<u64,Vec<f32>> = if emb_path.exists() {
+                    std::fs::read_to_string(&emb_path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+                } else { std::collections::HashMap::new() };
+                let mut items: Vec<serde_json::Value> = keywords.iter().map(|(id,summary)| {
+                    let ts = timestamps.get(id).copied().unwrap_or((0,0));
+                    serde_json::json!({"id":id,"summary":trunc(summary),"has_embedding":embeddings.contains_key(id),"created_at":ts.0})
+                }).collect();
+                items.sort_by(|a,b| {
+                    let ca = a.get("created_at").and_then(|v|v.as_f64()).unwrap_or(0.0);
+                    let cb = b.get("created_at").and_then(|v|v.as_f64()).unwrap_or(0.0);
+                    cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                Some(items)
+            })().unwrap_or_default();
 
             // RAM: ram_fts.json (HashMap<u64, entry>)
             let ram: Vec<serde_json::Value> = std::fs::read_to_string(memory_dir.join("ram_fts.json")).ok()
